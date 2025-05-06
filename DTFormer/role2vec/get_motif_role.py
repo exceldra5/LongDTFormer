@@ -66,26 +66,7 @@ def get_link_prediction_data(dataset_name: str, val_ratio: float, test_ratio: fl
         print(f"Error loading data: {e}")
         print(f"Attempted paths: {graph_df_path}, {edge_feat_path}, {node_feat_path}")
         print("Returning dummy data for demonstration. Please ensure dataset files exist for real use.")
-        exit(0)
-    #     # Return dummy data or raise error if files are not found
-    #     num_edges = 100
-    #     num_nodes = 50
-    #     dummy_df = pd.DataFrame({
-    #         'u': np.random.randint(0, num_nodes, num_edges),
-    #         'i': np.random.randint(0, num_nodes, num_edges),
-    #         'ts': np.sort(np.random.rand(num_edges) * 1000),
-    #         'idx': np.arange(num_edges),
-    #         'label': np.random.randint(0, 2, num_edges)
-    #     })
-    #     dummy_node_feat = np.random.rand(num_nodes + 1, 10) # +1 for potential node 0
-    #     dummy_edge_feat = np.random.rand(num_edges, 10)
-    #     graph_df = dummy_df
-    #     node_raw_features = dummy_node_feat
-    #     edge_raw_features = dummy_edge_feat
-    # except Exception as e:
-    #      print(f"An unexpected error occurred loading data: {e}")
-    #      raise # Re-raise the exception after printing
-
+        exit(1)
 
     NODE_FEAT_DIM = EDGE_FEAT_DIM = 172
     # Padding features to a fixed dimension (172)
@@ -431,21 +412,6 @@ def process_save_and_combine_motif_roles(graph_df: pd.DataFrame, num_snapshots: 
     except Exception as e:
         print(f"Error saving final pickle file to {final_output_path}: {e}")
 
-
-    # --- Clean up temporary files and directory ---
-    # print(f"\nCleaning up temporary files in {temp_dir}...")
-    # try:
-    #     temp_files = glob.glob(os.path.join(temp_dir, 'snapshot_*.pkl'))
-    #     for f in temp_files:
-    #         os.remove(f)
-    #     # Try removing the directory, will fail if not empty (e.g., due to errors)
-    #     os.rmdir(temp_dir)
-    #     print("Temporary files cleaned up.")
-    # except Exception as e:
-    #     print(f"Error cleaning up temporary files/directory {temp_dir}: {e}")
-    #     print("Temporary files may remain.")
-
-
     return final_combined_roles
 
 
@@ -585,7 +551,7 @@ if __name__ == "__main__":
     # Step 2: Process, save intermediate files, load and combine, then save final
     # Pass the dataframe with snapshot IDs, motif arguments, and the final output path
     # The function now handles the intermediate saving and final combining
-    final_combined_roles = process_save_and_combine_motif_roles(graph_df, num_snapshots, args, final_output_file_path)
+    final_combined_roles = process_save_and_combine_motif_roles(graph_df, num_snapshots, args, output_file_path)
 
     # Step 3: Verification of the final combined output (optional)
     print("\nVerification of final combined loaded roles (first snapshot, first 5 roles):")
