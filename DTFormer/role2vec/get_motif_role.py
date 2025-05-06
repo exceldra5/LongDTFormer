@@ -66,24 +66,25 @@ def get_link_prediction_data(dataset_name: str, val_ratio: float, test_ratio: fl
         print(f"Error loading data: {e}")
         print(f"Attempted paths: {graph_df_path}, {edge_feat_path}, {node_feat_path}")
         print("Returning dummy data for demonstration. Please ensure dataset files exist for real use.")
-        # Return dummy data or raise error if files are not found
-        num_edges = 100
-        num_nodes = 50
-        dummy_df = pd.DataFrame({
-            'u': np.random.randint(0, num_nodes, num_edges),
-            'i': np.random.randint(0, num_nodes, num_edges),
-            'ts': np.sort(np.random.rand(num_edges) * 1000),
-            'idx': np.arange(num_edges),
-            'label': np.random.randint(0, 2, num_edges)
-        })
-        dummy_node_feat = np.random.rand(num_nodes + 1, 10) # +1 for potential node 0
-        dummy_edge_feat = np.random.rand(num_edges, 10)
-        graph_df = dummy_df
-        node_raw_features = dummy_node_feat
-        edge_raw_features = dummy_edge_feat
-    except Exception as e:
-         print(f"An unexpected error occurred loading data: {e}")
-         raise # Re-raise the exception after printing
+        exit(0)
+    #     # Return dummy data or raise error if files are not found
+    #     num_edges = 100
+    #     num_nodes = 50
+    #     dummy_df = pd.DataFrame({
+    #         'u': np.random.randint(0, num_nodes, num_edges),
+    #         'i': np.random.randint(0, num_nodes, num_edges),
+    #         'ts': np.sort(np.random.rand(num_edges) * 1000),
+    #         'idx': np.arange(num_edges),
+    #         'label': np.random.randint(0, 2, num_edges)
+    #     })
+    #     dummy_node_feat = np.random.rand(num_nodes + 1, 10) # +1 for potential node 0
+    #     dummy_edge_feat = np.random.rand(num_edges, 10)
+    #     graph_df = dummy_df
+    #     node_raw_features = dummy_node_feat
+    #     edge_raw_features = dummy_edge_feat
+    # except Exception as e:
+    #      print(f"An unexpected error occurred loading data: {e}")
+    #      raise # Re-raise the exception after printing
 
 
     NODE_FEAT_DIM = EDGE_FEAT_DIM = 172
@@ -300,6 +301,154 @@ def get_motif_roles_per_snapshot(graph_df: pd.DataFrame, num_snapshots: int, mot
     return all_snapshot_roles_inverted
 
 
+def process_save_and_combine_motif_roles(graph_df: pd.DataFrame, num_snapshots: int, motif_args: argparse.Namespace, final_output_path: str):
+    """
+    Generates motif-based roles for each node in each time snapshot,
+    saves each snapshot's roles to a temporary pickle file,
+    then loads and combines all temporary files, saves the final result,
+    and cleans up temporary files.
+
+    :param graph_df: DataFrame containing all edges with 'u', 'i', and 'snapshots' columns.
+    :param num_snapshots: Total number of snapshots.
+    :param motif_args: An object/Namespace containing motif counting parameters
+                       (graphlet_size, quantiles, motif_compression, factors, clusters, beta, seed).
+    :param final_output_path: The file path to save the final combined pickled roles dictionary.
+    :return: A dictionary where keys are snapshot IDs (1 to num_snapshots) and
+             values are dictionaries mapping role IDs (str) to lists of node IDs (longlong).
+             Returns an empty dictionary if no roles were processed.
+    """
+    # Determine temporary directory and file pattern
+    temp_dir = os.path.join(os.path.dirname(final_output_path) or '.', 'temp_motif_roles')
+    os.makedirs(temp_dir, exist_ok=True)
+    temp_file_pattern = os.path.join(temp_dir, 'snapshot_{:04d}.pkl') # e.g., snapshot_0001.pkl
+
+    print(f"\nGenerating and saving motif roles for {num_snapshots} snapshots to temporary files in {temp_dir}...")
+
+    processed_snapshot_ids = []
+
+    for snapshot_id in range(1, num_snapshots + 1):
+        print(f"Processing and saving snapshot {snapshot_id}/{num_snapshots}...")
+        temp_snapshot_output_path = temp_file_pattern.format(snapshot_id)
+
+        # Check if temporary file already exists (for resuming if interrupted)
+        if os.path.exists(temp_snapshot_output_path):
+             print(f"  Temporary file for snapshot {snapshot_id} already exists. Skipping processing.")
+             processed_snapshot_ids.append(snapshot_id)
+             continue
+
+        # Filter edges for the current snapshot (cumulative up to this point)
+        snapshot_edges_df = graph_df[graph_df['snapshots'] <= snapshot_id]
+
+        if snapshot_edges_df.empty:
+            print(f"  No edges found up to snapshot {snapshot_id}. Skipping.")
+            # No temp file is created for empty snapshots
+            continue
+
+        # Build NetworkX graph for the current snapshot
+        snapshot_graph = nx.from_edgelist(snapshot_edges_df[['u', 'i']].values.tolist())
+        snapshot_graph.remove_edges_from(nx.selfloop_edges(snapshot_graph))
+
+        # Check if the graph is still empty or has no nodes after processing
+        if not snapshot_graph.nodes():
+             print(f"  Graph for snapshot {snapshot_id} has no nodes after processing. Skipping.")
+             continue
+
+        # Instantiate MotifCounterMachine
+        try:
+            motif_machine = MotifCounterMachine(snapshot_graph, motif_args)
+        except Exception as e:
+            print(f"  Error initializing MotifCounterMachine for snapshot {snapshot_id}: {e}")
+            continue # Skip this snapshot but continue with others
+
+        # Calculate motif features and get labels
+        try:
+            # This returns {node_id_str: [label_str]} or {node_id_str: label_str}
+            snapshot_roles_raw = motif_machine.create_string_labels()
+        except Exception as e:
+            print(f"  Error calculating motif roles for snapshot {snapshot_id}: {e}")
+            continue # Skip this snapshot but continue with others
+
+        # --- Restructure the roles into the desired format: role_id -> [node_ids] ---
+        current_snapshot_inverted_roles = {}
+        for node_str, label_val in snapshot_roles_raw.items():
+            # Convert node ID back to original type (e.g., longlong)
+            node_id = np.longlong(node_str)
+            # Get the actual role label string
+            role_label_str = label_val[0] if isinstance(label_val, list) else label_val
+
+            # Add node ID to the list for this role label in the inverted dictionary
+            if role_label_str not in current_snapshot_inverted_roles:
+                current_snapshot_inverted_roles[role_label_str] = []
+            current_snapshot_inverted_roles[role_label_str].append(node_id)
+
+        # --- Save the processed roles for this snapshot ---
+        try:
+            with open(temp_snapshot_output_path, 'wb') as f:
+                pickle.dump(current_snapshot_inverted_roles, f)
+            print(f"  Saved roles for snapshot {snapshot_id} to {temp_snapshot_output_path}")
+            processed_snapshot_ids.append(snapshot_id)
+        except Exception as e:
+            print(f"  Error saving temporary file for snapshot {snapshot_id} to {temp_snapshot_output_path}: {e}")
+
+
+    # --- Load and combine all temporary files ---
+    print("\nLoading and combining temporary snapshot role files...")
+    final_combined_roles = {}
+    # Sort the processed_snapshot_ids to load in order
+    processed_snapshot_ids.sort()
+
+    if not processed_snapshot_ids:
+        print("No temporary snapshot files were successfully processed. Returning empty result.")
+        # Clean up the empty temp directory if nothing was saved
+        if os.path.exists(temp_dir) and not os.listdir(temp_dir):
+             os.rmdir(temp_dir)
+        return {}
+
+
+    for snapshot_id in processed_snapshot_ids:
+        temp_snapshot_output_path = temp_file_pattern.format(snapshot_id)
+        try:
+            with open(temp_snapshot_output_path, 'rb') as f:
+                loaded_roles_for_snapshot = pickle.load(f)
+            final_combined_roles[snapshot_id] = loaded_roles_for_snapshot
+            print(f"  Loaded roles for snapshot {snapshot_id}")
+        except FileNotFoundError:
+             # This case should ideally not happen if processed_snapshot_ids is built correctly,
+             # but added for robustness.
+             print(f"  Warning: Temporary file not found for snapshot {snapshot_id} at {temp_snapshot_output_path}. Skipping.")
+        except Exception as e:
+             print(f"  Error loading temporary file for snapshot {snapshot_id} from {temp_snapshot_output_path}: {e}. Skipping.")
+
+    # --- Save the final combined result ---
+    print(f"\nSaving final combined motif roles to {final_output_path}...")
+    final_output_dir = os.path.dirname(final_output_path) or '.'
+    os.makedirs(final_output_dir, exist_ok=True)
+
+    try:
+        with open(final_output_path, 'wb') as f:
+            pickle.dump(final_combined_roles, f)
+        print("Final save complete.")
+    except Exception as e:
+        print(f"Error saving final pickle file to {final_output_path}: {e}")
+
+
+    # --- Clean up temporary files and directory ---
+    # print(f"\nCleaning up temporary files in {temp_dir}...")
+    # try:
+    #     temp_files = glob.glob(os.path.join(temp_dir, 'snapshot_*.pkl'))
+    #     for f in temp_files:
+    #         os.remove(f)
+    #     # Try removing the directory, will fail if not empty (e.g., due to errors)
+    #     os.rmdir(temp_dir)
+    #     print("Temporary files cleaned up.")
+    # except Exception as e:
+    #     print(f"Error cleaning up temporary files/directory {temp_dir}: {e}")
+    #     print("Temporary files may remain.")
+
+
+    return final_combined_roles
+
+
 def test():
     # Define dataset parameters
     dataset_name = "dummy" # Replace with your dataset name like "wikipedia" or "reddit"
@@ -410,65 +559,80 @@ if __name__ == "__main__":
     args.beta = 0.01
     args.seed = 42 # Used by KMeans/NMF in factorization
     
-    output_file_path = f"./output/{args.dataset}_motif_roles_{num_snapshots}_snapshots.pkl"
+    grandparent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    output_file_path = os.path.join(grandparent_dir, 'output', args.dataset, f"{args.dataset}_motif_roles_{num_snapshots}_snapshots.pkl")
+    
+    # make directory if not exist
+    output_dir = os.path.dirname(output_file_path)
+    if output_dir: # Only try to create directory if path includes one
+        os.makedirs(output_dir, exist_ok=True)
     
     # Step 1: Load your data using your function
-    # This function call might print file not found errors if './processed_data/{dataset_name}/ml_{dataset_name}.csv' etc. don't exist.
-    # The code includes dummy data creation in case of FileNotFoundError for demonstration.
-    print("Loading data...")
+    print(f"Starting data loading for {args.dataset}...")
     node_raw_features, edge_raw_features, full_data, train_data, val_data, test_data, _, _, node_snap_counts, graph_df = \
         get_link_prediction_data(args.dataset, args.val_ratio, args.test_ratio, num_snapshots)
 
+    # Check if graph_df is empty after loading (handles FileNotFoundError in get_link_prediction_data)
+    if graph_df.empty:
+        print("Graph data is empty after loading. Cannot proceed with motif role generation.")
+        exit() # Exit if no data to process
+
     print("\nData Loading Complete.")
-    # print(f"Loaded {len(graph_df)} total edges.")
+    print(f"Loaded {len(graph_df)} total edges.")
     # print(f"Snapshot distribution:\n{graph_df['snapshots'].value_counts().sort_index()}")
 
 
-    # Step 2: Get motif-based roles for each snapshot and save to pickle
-    # Pass the dataframe with snapshot IDs, motif arguments, and the output path
-    snapshot_motif_roles_inverted = get_motif_roles_per_snapshot(graph_df, num_snapshots, args, output_file_path)
+    # Step 2: Process, save intermediate files, load and combine, then save final
+    # Pass the dataframe with snapshot IDs, motif arguments, and the final output path
+    # The function now handles the intermediate saving and final combining
+    final_combined_roles = process_save_and_combine_motif_roles(graph_df, num_snapshots, args, final_output_file_path)
 
-    # Step 3: Verify the output structure and contents (optional)
-    print("\nVerification of loaded roles (first snapshot, first 5 roles):")
-    try:
-        with open(output_file_path, 'rb') as f:
-            loaded_roles = pickle.load(f)
+    # Step 3: Verification of the final combined output (optional)
+    print("\nVerification of final combined loaded roles (first snapshot, first 5 roles):")
+    if final_combined_roles:
+        snapshot_id_to_check_first = 1
+        # Find the first actual snapshot ID that had data
+        first_processed_snap = min(final_combined_roles.keys()) if final_combined_roles else None
 
-        snapshot_id_to_check = 1
-        if snapshot_id_to_check in loaded_roles:
-            roles_snap_check = loaded_roles[snapshot_id_to_check]
-            print(f"Loaded roles for snapshot {snapshot_id_to_check}:")
-            count = 0
-            if roles_snap_check:
-                for role_id, node_list in roles_snap_check.items():
-                    print(f"  Role '{role_id}': {len(node_list)} nodes -> {node_list[:5]}...") # Print first 5 nodes
-                    count += 1
-                    if count >= 5: # Print only 5 roles
-                        break
-            else:
-                print(f"  Snapshot {snapshot_id_to_check} has no roles.")
+        if first_processed_snap is not None:
+             roles_snap_check = final_combined_roles.get(first_processed_snap)
+             print(f"Loaded roles for first processed snapshot ({first_processed_snap}):")
+             count = 0
+             if roles_snap_check:
+                 for role_id, node_list in roles_snap_check.items():
+                     print(f"  Role '{role_id}': {len(node_list)} nodes -> {node_list[:5]}...") # Print first 5 nodes
+                     count += 1
+                     if count >= 5: # Print only 5 roles
+                         break
+                 if count == 0:
+                      print(f"  Snapshot {first_processed_snap} has no roles (empty dict).")
+             else:
+                  print(f"  Snapshot {first_processed_snap} not found in combined roles (should not happen if in keys).")
         else:
-            print(f"Snapshot {snapshot_id_to_check} not found in loaded roles.")
+             print("No snapshots processed and combined.")
+
 
         # Verify last snapshot
-        snapshot_id_to_check = num_snapshots
-        if snapshot_id_to_check in loaded_roles:
-            roles_snap_check = loaded_roles[snapshot_id_to_check]
-            print(f"Loaded roles for snapshot {snapshot_id_to_check} (Last Snapshot):")
-            count = 0
-            if roles_snap_check:
-                 for role_id, node_list in roles_snap_check.items():
-                    print(f"  Role '{role_id}': {len(node_list)} nodes -> {node_list[:5]}...") # Print first 5 nodes
-                    count += 1
-                    if count >= 5: # Print only 5 roles
-                        break
-            else:
-                 print(f"  Snapshot {snapshot_id_to_check} has no roles.")
+        snapshot_id_to_check_last = num_snapshots
+        # Find the last actual snapshot ID that had data
+        last_processed_snap = max(final_combined_roles.keys()) if final_combined_roles else None
+
+        if last_processed_snap is not None:
+             roles_snap_check = final_combined_roles.get(last_processed_snap)
+             print(f"\nLoaded roles for last processed snapshot ({last_processed_snap}):")
+             count = 0
+             if roles_snap_check:
+                  for role_id, node_list in roles_snap_check.items():
+                     print(f"  Role '{role_id}': {len(node_list)} nodes -> {node_list[:5]}...") # Print first 5 nodes
+                     count += 1
+                     if count >= 5: # Print only 5 roles
+                         break
+                  if count == 0:
+                      print(f"  Snapshot {last_processed_snap} has no roles (empty dict).")
+             else:
+                   print(f"  Snapshot {last_processed_snap} not found in combined roles (should not happen if in keys).")
         else:
-             print(f"Snapshot {snapshot_id_to_check} not found in loaded roles.")
+             print("No snapshots processed and combined.")
 
-
-    except FileNotFoundError:
-        print(f"Could not load {output_file_path} for verification.")
-    except Exception as e:
-        print(f"Error during verification: {e}")
+    else:
+        print("Final combined roles dictionary is empty.")
