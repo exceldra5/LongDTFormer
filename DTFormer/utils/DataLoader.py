@@ -172,17 +172,40 @@ def load_dblp3_data():
     """
     RTGCN의 DBLP3 데이터를 DTFormer 형식으로 로드합니다.
     """
+    import numpy as np
+    from scipy.sparse import csr_matrix
     
     # DBLP3.npz 파일 로드
     data = np.load('RTGCN/data/DBLP3/DBLP3.npz')
     
     # 데이터 추출
-    node_features = data['node_features']
-    edge_index = data['edge_index']
-    edge_times = data['edge_times']
+    adjs = data['adjs']  # (10, 4257, 4257) - 10개의 타임스텝에 대한 인접 행렬
+    attmats = data['attmats']  # (4257, 10, 100) - 노드 특성
+    labels = data['labels']  # (4257, 3) - 노드 레이블
     
-    # 노드 수 계산
-    num_nodes = node_features.shape[0]
+    num_nodes = adjs.shape[1]  # 4257
+    num_timesteps = adjs.shape[0]  # 10
+    
+    # 노드 특성을 DTFormer 형식으로 변환
+    node_features = np.zeros((num_nodes, 172))  # DTFormer는 172차원 특성을 사용
+    node_features[:, :100] = attmats[:, -1, :]  # 마지막 타임스텝의 특성 사용
+    
+    # 엣지 정보 생성
+    edge_list = []
+    edge_times = []
+    
+    for t in range(num_timesteps):
+        # 현재 타임스텝의 인접 행렬
+        adj_matrix = adjs[t]
+        # 엣지가 있는 위치 찾기
+        src_nodes, dst_nodes = np.nonzero(adj_matrix)
+        
+        # 현재 타임스텝의 엣지 추가
+        edge_list.extend(list(zip(src_nodes, dst_nodes)))
+        edge_times.extend([t] * len(src_nodes))
+    
+    edge_list = np.array(edge_list)
+    edge_times = np.array(edge_times)
     
     # 시간 정규화
     edge_times = (edge_times - edge_times.min()) / (edge_times.max() - edge_times.min())
@@ -199,29 +222,29 @@ def load_dblp3_data():
     
     # 데이터셋 생성
     train_data = {
-        'src_node_ids': edge_index[0, train_indices],
-        'dst_node_ids': edge_index[1, train_indices],
+        'src_node_ids': edge_list[train_indices, 0],
+        'dst_node_ids': edge_list[train_indices, 1],
         'node_interact_times': edge_times[train_indices],
         'edge_ids': train_indices
     }
     
     val_data = {
-        'src_node_ids': edge_index[0, val_indices],
-        'dst_node_ids': edge_index[1, val_indices],
+        'src_node_ids': edge_list[val_indices, 0],
+        'dst_node_ids': edge_list[val_indices, 1],
         'node_interact_times': edge_times[val_indices],
         'edge_ids': val_indices
     }
     
     test_data = {
-        'src_node_ids': edge_index[0, test_indices],
-        'dst_node_ids': edge_index[1, test_indices],
+        'src_node_ids': edge_list[test_indices, 0],
+        'dst_node_ids': edge_list[test_indices, 1],
         'node_interact_times': edge_times[test_indices],
         'edge_ids': test_indices
     }
     
     full_data = {
-        'src_node_ids': edge_index[0],
-        'dst_node_ids': edge_index[1],
+        'src_node_ids': edge_list[:, 0],
+        'dst_node_ids': edge_list[:, 1],
         'node_interact_times': edge_times,
         'edge_ids': np.arange(len(edge_times))
     }
