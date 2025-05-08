@@ -220,33 +220,41 @@ def load_dblp3_data():
     val_indices = indices[train_size:train_size + val_size]
     test_indices = indices[train_size + val_size:]
     
-    # 데이터셋 생성
-    train_data = {
-        'src_node_ids': edge_list[train_indices, 0],
-        'dst_node_ids': edge_list[train_indices, 1],
-        'node_interact_times': edge_times[train_indices],
-        'edge_ids': train_indices
-    }
+    # Data 클래스 인스턴스 생성
+    train_data = Data(
+        src_node_ids=edge_list[train_indices, 0],
+        dst_node_ids=edge_list[train_indices, 1],
+        node_interact_times=edge_times[train_indices],
+        edge_ids=train_indices,
+        labels=np.ones(len(train_indices)),  # 모든 엣지는 양성 샘플
+        snapshots=np.ones(len(train_indices))  # 스냅샷 정보는 1로 설정
+    )
     
-    val_data = {
-        'src_node_ids': edge_list[val_indices, 0],
-        'dst_node_ids': edge_list[val_indices, 1],
-        'node_interact_times': edge_times[val_indices],
-        'edge_ids': val_indices
-    }
+    val_data = Data(
+        src_node_ids=edge_list[val_indices, 0],
+        dst_node_ids=edge_list[val_indices, 1],
+        node_interact_times=edge_times[val_indices],
+        edge_ids=val_indices,
+        labels=np.ones(len(val_indices)),
+        snapshots=np.ones(len(val_indices))
+    )
     
-    test_data = {
-        'src_node_ids': edge_list[test_indices, 0],
-        'dst_node_ids': edge_list[test_indices, 1],
-        'node_interact_times': edge_times[test_indices],
-        'edge_ids': test_indices
-    }
+    test_data = Data(
+        src_node_ids=edge_list[test_indices, 0],
+        dst_node_ids=edge_list[test_indices, 1],
+        node_interact_times=edge_times[test_indices],
+        edge_ids=test_indices,
+        labels=np.ones(len(test_indices)),
+        snapshots=np.ones(len(test_indices))
+    )
     
-    full_data = {
-        'src_node_ids': edge_list[:, 0],
-        'dst_node_ids': edge_list[:, 1],
-        'node_interact_times': edge_times,
-        'edge_ids': np.arange(len(edge_times))
-    }
+    full_data = Data(
+        src_node_ids=edge_list[:, 0],
+        dst_node_ids=edge_list[:, 1],
+        node_interact_times=edge_times,
+        edge_ids=np.arange(len(edge_times)),
+        labels=np.ones(len(edge_times)),
+        snapshots=np.ones(len(edge_times))
+    )
     
     return node_features, None, full_data, train_data, val_data, test_data, None, None, None
