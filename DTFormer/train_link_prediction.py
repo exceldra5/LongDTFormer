@@ -142,13 +142,25 @@ if __name__ == "__main__":
         shutil.rmtree(save_model_folder, ignore_errors=True)
         os.makedirs(save_model_folder, exist_ok=True)
 
+        # 체크포인트 저장 경로 추가
+        checkpoint_folder = f"./checkpoints/{args.model_name}/{args.dataset_name}/{args.save_model_name}/"
+        os.makedirs(checkpoint_folder, exist_ok=True)
+
         early_stopping = EarlyStopping(patience=args.patience, save_model_folder=save_model_folder,
                                        save_model_name=args.save_model_name, logger=logger, model_name=args.model_name)
 
         loss_func = nn.BCELoss()
 
-        for epoch in range(args.num_epochs):
+        # 체크포인트 로드 시도
+        start_epoch = 0
+        if os.path.exists(os.path.join(checkpoint_folder, 'latest_checkpoint.pt')):
+            checkpoint = torch.load(os.path.join(checkpoint_folder, 'latest_checkpoint.pt'))
+            model.load_state_dict(checkpoint['model_state_dict'])
+            optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+            start_epoch = checkpoint['epoch']
+            logger.info(f'체크포인트에서 복구: epoch {start_epoch}')
 
+        for epoch in range(start_epoch, args.num_epochs):
             model.train()
             # training, only use training graph
             model[0].set_neighbor_sampler(train_neighbor_sampler)
@@ -204,6 +216,14 @@ if __name__ == "__main__":
 
                 train_idx_data_loader_tqdm.set_description(
                     f'Epoch: {epoch + 1}, train for the {batch_idx + 1}-th batch, train loss: {loss.item()}')
+
+            # 매 에포크마다 체크포인트 저장
+            checkpoint = {
+                'epoch': epoch + 1,
+                'model_state_dict': model.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+            }
+            torch.save(checkpoint, os.path.join(checkpoint_folder, 'latest_checkpoint.pt'))
 
             val_losses, val_metrics = evaluate_model_link_prediction(model=model,
                                                                      neighbor_sampler=full_neighbor_sampler,
