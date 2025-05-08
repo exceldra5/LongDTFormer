@@ -366,7 +366,8 @@ class DTFormer(nn.Module):
         # 유효한 노드 ID에 대해서만 node_snap_counts 값을 설정
         valid_mask = (padded_nodes_neighbor_ids_tensor > 0) & (padded_nodes_neighbor_ids_tensor < self.node_snap_counts.shape[0])
         valid_indices = padded_nodes_neighbor_ids_tensor[valid_mask]
-        padded_nodes_neighbor_node_snap_counts[valid_mask] = self.node_snap_counts[valid_indices]
+        if valid_indices.numel() > 0:  # 유효한 인덱스가 있는 경우에만 처리
+            padded_nodes_neighbor_node_snap_counts[valid_mask] = self.node_snap_counts[valid_indices]
 
         batch_size = padded_nodes_neighbor_node_snap_counts.shape[0]
         max_seq_length = padded_nodes_neighbor_node_snap_counts.shape[1]
