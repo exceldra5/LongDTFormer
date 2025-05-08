@@ -193,6 +193,15 @@ def load_dblp3_data():
     # 엣지 특성 생성 (더미 특성)
     edge_features = np.zeros((num_nodes * num_nodes, 172))  # 모든 가능한 엣지에 대한 특성
     
+    # 노드별 스냅샷 카운트 생성
+    node_snap_counts = np.zeros((num_nodes + 1, num_timesteps))  # +1 for padding
+    for t in range(num_timesteps):
+        # 현재 타임스텝의 인접 행렬
+        adj_matrix = adjs[t]
+        # 각 노드의 연결 수 계산
+        node_degrees = adj_matrix.sum(axis=1)
+        node_snap_counts[1:, t] = node_degrees  # 0번 인덱스는 패딩용
+    
     # 엣지 정보 생성
     edge_list = []
     edge_times = []
@@ -260,4 +269,4 @@ def load_dblp3_data():
         snapshots=np.ones(len(edge_times))
     )
     
-    return node_features, edge_features, full_data, train_data, val_data, test_data, None, None, None
+    return node_features, edge_features, full_data, train_data, val_data, test_data, None, None, node_snap_counts
