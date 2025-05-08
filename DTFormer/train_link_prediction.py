@@ -17,6 +17,7 @@ from utils.utils import get_neighbor_sampler, NegativeEdgeSampler
 from evaluate_models_utils import evaluate_model_link_prediction, test_model_link_prediction
 from utils.metrics import get_link_prediction_metrics
 from utils.DataLoader import get_idx_data_loader, get_link_prediction_data
+from utils.DataLoader_rtgcn import load_rtgcn_data_for_dtformer
 from utils.EarlyStopping import EarlyStopping
 from utils.load_configs import get_link_prediction_args
 
@@ -43,12 +44,26 @@ if __name__ == "__main__":
                           'reddit-body': 178,
                           'reddit-title': 178,
                           'mathoverflow': 2350,
-                          'email-Eu-core': 803}
+                          'email-Eu-core': 803,
+                          'DBLP3': 3,  # RTGCN DBLP3 데이터셋
+                          'DBLP5': 5}  # RTGCN DBLP5 데이터셋
 
     # get data for training, validation and testing
-    node_raw_features, edge_raw_features, full_data, train_data, val_data, test_data, _, _, node_snap_counts = \
-        get_link_prediction_data(dataset_name=args.dataset_name, val_ratio=args.val_ratio, test_ratio=args.test_ratio,
-                                 num_snapshots=data_snapshots_num[args.dataset_name])
+    if args.dataset_name in ['DBLP3', 'DBLP5']:
+        # RTGCN 데이터 로드
+        dataset_path = f'./RTGCN/data/{args.dataset_name}/{args.dataset_name}.npz'
+        node_raw_features, edge_raw_features, full_data, train_data, val_data, test_data, _, _, node_snap_counts = \
+            load_rtgcn_data_for_dtformer(dataset_path=dataset_path, 
+                                        val_ratio=args.val_ratio, 
+                                        test_ratio=args.test_ratio,
+                                        num_snapshots=data_snapshots_num[args.dataset_name])
+    else:
+        # 기존 데이터 로드
+        node_raw_features, edge_raw_features, full_data, train_data, val_data, test_data, _, _, node_snap_counts = \
+            get_link_prediction_data(dataset_name=args.dataset_name, 
+                                   val_ratio=args.val_ratio, 
+                                   test_ratio=args.test_ratio,
+                                   num_snapshots=data_snapshots_num[args.dataset_name])
 
     # initialize training neighbor sampler to retrieve temporal graph
     train_neighbor_sampler = get_neighbor_sampler(data=train_data,
