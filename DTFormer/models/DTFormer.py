@@ -357,10 +357,16 @@ class DTFormer(nn.Module):
         padded_nodes_edge_raw_features = self.edge_raw_features[torch.from_numpy(padded_nodes_edge_ids)]
 
         # Tensor, shape (batch_size, max_seq_length, num_snapshots)
-        padded_nodes_neighbor_node_snap_counts = self.node_snap_counts[torch.from_numpy(padded_nodes_neighbor_ids)]
+        padded_nodes_neighbor_ids_tensor = torch.from_numpy(padded_nodes_neighbor_ids).to(self.device)
+        padded_nodes_neighbor_node_snap_counts = torch.zeros(
+            (padded_nodes_neighbor_ids.shape[0], padded_nodes_neighbor_ids.shape[1], self.num_snapshots),
+            device=self.device
+        )
         
-        # 패딩된 노드의 스냅샷 카운트를 0으로 설정
-        padded_nodes_neighbor_node_snap_counts[torch.from_numpy(padded_nodes_neighbor_ids == 0)] = 0.0
+        # 유효한 노드 ID에 대해서만 node_snap_counts 값을 설정
+        valid_mask = (padded_nodes_neighbor_ids_tensor > 0) & (padded_nodes_neighbor_ids_tensor < self.node_snap_counts.shape[0])
+        valid_indices = padded_nodes_neighbor_ids_tensor[valid_mask]
+        padded_nodes_neighbor_node_snap_counts[valid_mask] = self.node_snap_counts[valid_indices]
 
         batch_size = padded_nodes_neighbor_node_snap_counts.shape[0]
         max_seq_length = padded_nodes_neighbor_node_snap_counts.shape[1]
