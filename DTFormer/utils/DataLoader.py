@@ -190,6 +190,9 @@ def load_dblp3_data():
     node_features = np.zeros((num_nodes, 172))  # DTFormer는 172차원 특성을 사용
     node_features[:, :100] = attmats[:, -1, :]  # 마지막 타임스텝의 특성 사용
     
+    # 엣지 특성 생성 (더미 특성)
+    edge_features = np.zeros((num_nodes * num_nodes, 172))  # 모든 가능한 엣지에 대한 특성
+    
     # 엣지 정보 생성
     edge_list = []
     edge_times = []
@@ -257,4 +260,4 @@ def load_dblp3_data():
         snapshots=np.ones(len(edge_times))
     )
     
-    return node_features, None, full_data, train_data, val_data, test_data, None, None, None
+    return node_features, edge_features, full_data, train_data, val_data, test_data, None, None, None
