@@ -351,53 +351,66 @@ class DTFormer(nn.Module):
                      padded_nodes_neighbor_times: np.ndarray, time_encoder: TimeEncoder,
                      node_snapshots: np.ndarray, padded_nodes_neighbor_snapshots: np.ndarray,
                      snapshot_encoder: PositionalEncoding1D):
-        # Tensor, shape (batch_size, max_seq_length, node_feat_dim)
-        padded_nodes_neighbor_node_raw_features = self.node_raw_features[torch.from_numpy(padded_nodes_neighbor_ids)]
-        # Tensor, shape (batch_size, max_seq_length, edge_feat_dim)
-        padded_nodes_edge_raw_features = self.edge_raw_features[torch.from_numpy(padded_nodes_edge_ids)]
+        try:
+            # 인덱스 범위 체크 및 클리핑
+            max_node_idx = self.node_raw_features.shape[0]
+            max_edge_idx = self.edge_raw_features.shape[0]
+            
+            padded_nodes_neighbor_ids = np.clip(padded_nodes_neighbor_ids, 0, max_node_idx - 1)
+            padded_nodes_edge_ids = np.clip(padded_nodes_edge_ids, 0, max_edge_idx - 1)
+            
+            # Tensor, shape (batch_size, max_seq_length, node_feat_dim)
+            padded_nodes_neighbor_node_raw_features = self.node_raw_features[torch.from_numpy(padded_nodes_neighbor_ids)]
+            # Tensor, shape (batch_size, max_seq_length, edge_feat_dim)
+            padded_nodes_edge_raw_features = self.edge_raw_features[torch.from_numpy(padded_nodes_edge_ids)]
 
-        # Tensor, shape (batch_size, max_seq_length, num_snapshots)
-        padded_nodes_neighbor_ids_tensor = torch.from_numpy(padded_nodes_neighbor_ids).to(self.device)
-        padded_nodes_neighbor_node_snap_counts = torch.zeros(
-            (padded_nodes_neighbor_ids.shape[0], padded_nodes_neighbor_ids.shape[1], self.num_snapshots),
-            device=self.device
-        )
-
-        # 유효한 노드 ID에 대해서만 node_snap_counts 값을 설정
-        valid_mask = (padded_nodes_neighbor_ids_tensor > 0) & (padded_nodes_neighbor_ids_tensor < self.node_snap_counts.shape[0])
-        valid_indices = padded_nodes_neighbor_ids_tensor[valid_mask].long()  # long() 타입으로 변환
-        if valid_indices.numel() > 0:  # 유효한 인덱스가 있는 경우에만 처리
-            try:
+            # Tensor, shape (batch_size, max_seq_length, num_snapshots)
+            padded_nodes_neighbor_ids_tensor = torch.from_numpy(padded_nodes_neighbor_ids).to(self.device)
+            padded_nodes_neighbor_node_snap_counts = torch.zeros(
+                (padded_nodes_neighbor_ids.shape[0], padded_nodes_neighbor_ids.shape[1], self.num_snapshots),
+                device=self.device
+            )
+            
+            # 유효한 노드 ID에 대해서만 node_snap_counts 값을 설정
+            valid_mask = (padded_nodes_neighbor_ids_tensor > 0) & (padded_nodes_neighbor_ids_tensor < self.node_snap_counts.shape[0])
+            valid_indices = padded_nodes_neighbor_ids_tensor[valid_mask].long()  # long() 타입으로 변환
+            if valid_indices.numel() > 0:  # 유효한 인덱스가 있는 경우에만 처리
                 padded_nodes_neighbor_node_snap_counts[valid_mask] = self.node_snap_counts[valid_indices]
-            except:
-                print(f"Error indices shape: {valid_indices.shape}, max index: {valid_indices.max()}, node_snap_counts shape: {self.node_snap_counts.shape}")
-                raise
 
-        batch_size = padded_nodes_neighbor_node_snap_counts.shape[0]
-        max_seq_length = padded_nodes_neighbor_node_snap_counts.shape[1]
+            batch_size = padded_nodes_neighbor_node_snap_counts.shape[0]
+            max_seq_length = padded_nodes_neighbor_node_snap_counts.shape[1]
 
-        node_snapshots_tensor = torch.tensor(node_snapshots).to(self.device)
+            node_snapshots_tensor = torch.tensor(node_snapshots).to(self.device)
 
-        # 마스크 생성 및 적용
-        mask = torch.arange(self.num_snapshots, device=self.device).expand(batch_size, max_seq_length, self.num_snapshots) < (
-                node_snapshots_tensor - 1)[:, None, None]
-        masked_padded_nodes_neighbor_node_snap_counts = padded_nodes_neighbor_node_snap_counts.clone()
-        masked_padded_nodes_neighbor_node_snap_counts[~mask] = 0
+            # 마스크 생성 및 적용
+            mask = torch.arange(self.num_snapshots, device=self.device).expand(batch_size, max_seq_length, self.num_snapshots) < (
+                    node_snapshots_tensor - 1)[:, None, None]
+            masked_padded_nodes_neighbor_node_snap_counts = padded_nodes_neighbor_node_snap_counts.clone()
+            masked_padded_nodes_neighbor_node_snap_counts[~mask] = 0
 
-        # Tensor, shape (batch_size, max_seq_length, time_feat_dim)
-        padded_nodes_neighbor_time_features = time_encoder(
-            timestamps=torch.from_numpy(node_interact_times[:, np.newaxis] - padded_nodes_neighbor_times).float().to(
-                self.device))
+            # Tensor, shape (batch_size, max_seq_length, time_feat_dim)
+            padded_nodes_neighbor_time_features = time_encoder(
+                timestamps=torch.from_numpy(node_interact_times[:, np.newaxis] - padded_nodes_neighbor_times).float().to(
+                    self.device))
 
-        padded_nodes_neighbor_snapshot_features = snapshot_encoder(
-            timestamps=torch.from_numpy(node_snapshots[:, np.newaxis] - padded_nodes_neighbor_snapshots).float().to(
-                self.device))
+            padded_nodes_neighbor_snapshot_features = snapshot_encoder(
+                timestamps=torch.from_numpy(node_snapshots[:, np.newaxis] - padded_nodes_neighbor_snapshots).float().to(
+                    self.device))
 
-        # 패딩된 노드의 특성을 0으로 설정
-        padded_nodes_neighbor_time_features[torch.from_numpy(padded_nodes_neighbor_ids == 0)] = 0.0
-        padded_nodes_neighbor_snapshot_features[torch.from_numpy(padded_nodes_neighbor_ids == 0)] = 0.0
+            # 패딩된 노드의 특성을 0으로 설정
+            padded_nodes_neighbor_time_features[torch.from_numpy(padded_nodes_neighbor_ids == 0)] = 0.0
+            padded_nodes_neighbor_snapshot_features[torch.from_numpy(padded_nodes_neighbor_ids == 0)] = 0.0
 
-        return padded_nodes_neighbor_node_raw_features, padded_nodes_edge_raw_features, padded_nodes_neighbor_time_features, padded_nodes_neighbor_snapshot_features, masked_padded_nodes_neighbor_node_snap_counts
+            return padded_nodes_neighbor_node_raw_features, padded_nodes_edge_raw_features, padded_nodes_neighbor_time_features, padded_nodes_neighbor_snapshot_features, masked_padded_nodes_neighbor_node_snap_counts
+        
+        except Exception as e:
+            print(f"Error in get_features:")
+            print(f"padded_nodes_neighbor_ids shape: {padded_nodes_neighbor_ids.shape}, max: {padded_nodes_neighbor_ids.max()}, min: {padded_nodes_neighbor_ids.min()}")
+            print(f"padded_nodes_edge_ids shape: {padded_nodes_edge_ids.shape}, max: {padded_nodes_edge_ids.max()}, min: {padded_nodes_edge_ids.min()}")
+            print(f"node_raw_features shape: {self.node_raw_features.shape}")
+            print(f"edge_raw_features shape: {self.edge_raw_features.shape}")
+            print(f"node_snap_counts shape: {self.node_snap_counts.shape}")
+            raise
 
     def get_patches(self, padded_nodes_neighbor_node_raw_features: torch.Tensor,
                     padded_nodes_edge_raw_features: torch.Tensor,
