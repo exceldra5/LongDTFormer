@@ -94,10 +94,13 @@ def load_rtgcn_data_for_dtformer(dataset_path: str, val_ratio: float, test_ratio
     
     # 노드별 스냅샷 출현 횟수 계산
     node_snap_counts = np.zeros((num_nodes + 1, num_snapshots))
-    for snap_idx in range(num_snapshots):
+    for snap_idx in range(min(num_snapshots, adjs.shape[0])):
         adj = adjs[snap_idx]
         node_counts = np.sum(adj, axis=1)
         node_snap_counts[1:, snap_idx] = node_counts
+    
+    # 패딩 노드의 스냅샷 카운트를 0으로 설정
+    node_snap_counts[0, :] = 0
     
     # 데이터 분할
     val_time = int(num_snapshots * (1 - val_ratio - test_ratio))

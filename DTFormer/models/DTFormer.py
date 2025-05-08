@@ -358,15 +358,18 @@ class DTFormer(nn.Module):
 
         # Tensor, shape (batch_size, max_seq_length, num_snapshots)
         padded_nodes_neighbor_node_snap_counts = self.node_snap_counts[torch.from_numpy(padded_nodes_neighbor_ids)]
+        
+        # 패딩된 노드의 스냅샷 카운트를 0으로 설정
+        padded_nodes_neighbor_node_snap_counts[torch.from_numpy(padded_nodes_neighbor_ids == 0)] = 0.0
 
         batch_size = padded_nodes_neighbor_node_snap_counts.shape[0]
         max_seq_length = padded_nodes_neighbor_node_snap_counts.shape[1]
 
-        node_snapshots_tensor = torch.tensor(node_snapshots)
+        node_snapshots_tensor = torch.tensor(node_snapshots).to(self.device)
 
-        mask = torch.arange(self.num_snapshots).expand(batch_size, max_seq_length, self.num_snapshots) < (
-                                                                                                                     node_snapshots_tensor - 1)[
-                                                                                                         :, None, None]
+        # 마스크 생성 및 적용
+        mask = torch.arange(self.num_snapshots, device=self.device).expand(batch_size, max_seq_length, self.num_snapshots) < (
+                node_snapshots_tensor - 1)[:, None, None]
         masked_padded_nodes_neighbor_node_snap_counts = padded_nodes_neighbor_node_snap_counts.clone()
         masked_padded_nodes_neighbor_node_snap_counts[~mask] = 0
 
@@ -379,7 +382,7 @@ class DTFormer(nn.Module):
             timestamps=torch.from_numpy(node_snapshots[:, np.newaxis] - padded_nodes_neighbor_snapshots).float().to(
                 self.device))
 
-        # ndarray, set the time features to all zeros for the padded timestamp
+        # 패딩된 노드의 특성을 0으로 설정
         padded_nodes_neighbor_time_features[torch.from_numpy(padded_nodes_neighbor_ids == 0)] = 0.0
         padded_nodes_neighbor_snapshot_features[torch.from_numpy(padded_nodes_neighbor_ids == 0)] = 0.0
 
@@ -545,7 +548,7 @@ class TransformerEncoder(nn.Module):
 
     def __init__(self, attention_dim: int, num_heads: int, dropout: float = 0.1):
         super(TransformerEncoder, self).__init__()
-        # use the MultiheadAttention implemented by PyTorch
+        # use the MultiheadAttention module implemented by PyTorch
         self.multi_head_attention = MultiheadAttention(embed_dim=attention_dim, num_heads=num_heads, dropout=dropout)
 
         self.dropout = nn.Dropout(dropout)
