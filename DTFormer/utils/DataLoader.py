@@ -1,4 +1,5 @@
 from torch.utils.data import Dataset, DataLoader
+from scipy.sparse import csr_matrix
 import numpy as np
 import random
 import pandas as pd
@@ -165,3 +166,64 @@ def get_link_prediction_data(dataset_name: str, val_ratio: float, test_ratio: fl
         test_data.num_interactions, test_data.num_unique_nodes))
 
     return node_raw_features, edge_raw_features, full_data, train_data, val_data, test_data, None, None, node_snap_counts
+
+
+def load_dblp3_data():
+    """
+    RTGCN의 DBLP3 데이터를 DTFormer 형식으로 로드합니다.
+    """
+    
+    # DBLP3.npz 파일 로드
+    data = np.load('RTGCN/data/DBLP3/DBLP3.npz')
+    
+    # 데이터 추출
+    node_features = data['node_features']
+    edge_index = data['edge_index']
+    edge_times = data['edge_times']
+    
+    # 노드 수 계산
+    num_nodes = node_features.shape[0]
+    
+    # 시간 정규화
+    edge_times = (edge_times - edge_times.min()) / (edge_times.max() - edge_times.min())
+    
+    # 데이터 분할 (train: 0.7, val: 0.15, test: 0.15)
+    num_edges = len(edge_times)
+    indices = np.random.permutation(num_edges)
+    train_size = int(0.7 * num_edges)
+    val_size = int(0.15 * num_edges)
+    
+    train_indices = indices[:train_size]
+    val_indices = indices[train_size:train_size + val_size]
+    test_indices = indices[train_size + val_size:]
+    
+    # 데이터셋 생성
+    train_data = {
+        'src_node_ids': edge_index[0, train_indices],
+        'dst_node_ids': edge_index[1, train_indices],
+        'node_interact_times': edge_times[train_indices],
+        'edge_ids': train_indices
+    }
+    
+    val_data = {
+        'src_node_ids': edge_index[0, val_indices],
+        'dst_node_ids': edge_index[1, val_indices],
+        'node_interact_times': edge_times[val_indices],
+        'edge_ids': val_indices
+    }
+    
+    test_data = {
+        'src_node_ids': edge_index[0, test_indices],
+        'dst_node_ids': edge_index[1, test_indices],
+        'node_interact_times': edge_times[test_indices],
+        'edge_ids': test_indices
+    }
+    
+    full_data = {
+        'src_node_ids': edge_index[0],
+        'dst_node_ids': edge_index[1],
+        'node_interact_times': edge_times,
+        'edge_ids': np.arange(len(edge_times))
+    }
+    
+    return node_features, None, full_data, train_data, val_data, test_data, None, None, None
