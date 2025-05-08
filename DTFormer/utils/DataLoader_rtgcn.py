@@ -75,6 +75,10 @@ def load_rtgcn_data_for_dtformer(dataset_path: str, val_ratio: float, test_ratio
         adj = adjs[snap_idx]
         src, dst = np.nonzero(adj)
         
+        # 노드 ID가 1부터 시작하도록 조정
+        src = src + 1
+        dst = dst + 1
+        
         src_node_ids.extend(src)
         dst_node_ids.extend(dst)
         node_interact_times.extend([snap_idx] * len(src))
