@@ -107,29 +107,34 @@ def load_rtgcn_data_for_dtformer(dataset_path: str, val_ratio: float, test_ratio
     node_snap_counts[0, :] = 0
     
     # 데이터 분할
-    val_time = int(num_snapshots * (1 - val_ratio - test_ratio))
-    test_time = int(num_snapshots * (1 - test_ratio))
+    total_interactions = len(node_interact_times)
+    indices = np.arange(total_interactions)
+    np.random.shuffle(indices)
     
-    train_mask = node_interact_times <= val_time
-    val_mask = np.logical_and(node_interact_times <= test_time, node_interact_times > val_time)
-    test_mask = node_interact_times > test_time
+    val_size = int(total_interactions * val_ratio)
+    test_size = int(total_interactions * test_ratio)
+    train_size = total_interactions - val_size - test_size
+    
+    train_indices = indices[:train_size]
+    val_indices = indices[train_size:train_size + val_size]
+    test_indices = indices[train_size + val_size:]
     
     # 데이터 객체 생성
     full_data = Data(src_node_ids=src_node_ids, dst_node_ids=dst_node_ids,
                     node_interact_times=node_interact_times, edge_ids=edge_ids,
                     labels=labels, snapshots=snapshots)
     
-    train_data = Data(src_node_ids=src_node_ids[train_mask], dst_node_ids=dst_node_ids[train_mask],
-                     node_interact_times=node_interact_times[train_mask], edge_ids=edge_ids[train_mask],
-                     labels=labels[train_mask], snapshots=snapshots[train_mask])
+    train_data = Data(src_node_ids=src_node_ids[train_indices], dst_node_ids=dst_node_ids[train_indices],
+                     node_interact_times=node_interact_times[train_indices], edge_ids=edge_ids[train_indices],
+                     labels=labels[train_indices], snapshots=snapshots[train_indices])
     
-    val_data = Data(src_node_ids=src_node_ids[val_mask], dst_node_ids=dst_node_ids[val_mask],
-                   node_interact_times=node_interact_times[val_mask], edge_ids=edge_ids[val_mask],
-                   labels=labels[val_mask], snapshots=snapshots[val_mask])
+    val_data = Data(src_node_ids=src_node_ids[val_indices], dst_node_ids=dst_node_ids[val_indices],
+                   node_interact_times=node_interact_times[val_indices], edge_ids=edge_ids[val_indices],
+                   labels=labels[val_indices], snapshots=snapshots[val_indices])
     
-    test_data = Data(src_node_ids=src_node_ids[test_mask], dst_node_ids=dst_node_ids[test_mask],
-                    node_interact_times=node_interact_times[test_mask], edge_ids=edge_ids[test_mask],
-                    labels=labels[test_mask], snapshots=snapshots[test_mask])
+    test_data = Data(src_node_ids=src_node_ids[test_indices], dst_node_ids=dst_node_ids[test_indices],
+                    node_interact_times=node_interact_times[test_indices], edge_ids=edge_ids[test_indices],
+                    labels=labels[test_indices], snapshots=snapshots[test_indices])
     
     return node_raw_features, edge_raw_features, full_data, train_data, val_data, test_data, None, None, node_snap_counts
 
