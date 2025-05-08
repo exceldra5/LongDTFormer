@@ -51,7 +51,7 @@ if __name__ == "__main__":
     # get data for training, validation and testing
     if args.dataset_name in ['DBLP3', 'DBLP5']:
         # RTGCN 데이터 로드
-        dataset_path = f'./RTGCN/data/{args.dataset_name}/{args.dataset_name}.npz'
+        dataset_path = f'../RTGCN/data/{args.dataset_name}/{args.dataset_name}.npz'
         node_raw_features, edge_raw_features, full_data, train_data, val_data, test_data, _, _, node_snap_counts = \
             load_rtgcn_data_for_dtformer(dataset_path=dataset_path, 
                                         val_ratio=args.val_ratio, 
