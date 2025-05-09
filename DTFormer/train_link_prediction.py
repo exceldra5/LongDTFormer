@@ -153,12 +153,14 @@ if __name__ == "__main__":
 
         # 체크포인트 로드 시도
         start_epoch = 0
+        best_val_metric = float('inf')
         if os.path.exists(os.path.join(checkpoint_folder, 'latest_checkpoint.pt')):
             checkpoint = torch.load(os.path.join(checkpoint_folder, 'latest_checkpoint.pt'))
             model.load_state_dict(checkpoint['model_state_dict'])
             optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
             start_epoch = checkpoint['epoch']
-            logger.info(f'체크포인트에서 복구: epoch {start_epoch}')
+            best_val_metric = checkpoint.get('best_val_metric', float('inf'))
+            logger.info(f'체크포인트에서 복구: epoch {start_epoch}, best_val_metric: {best_val_metric}')
 
         for epoch in range(start_epoch, args.num_epochs):
             model.train()
@@ -222,6 +224,7 @@ if __name__ == "__main__":
                 'epoch': epoch + 1,
                 'model_state_dict': model.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(),
+                'best_val_metric': best_val_metric
             }
             torch.save(checkpoint, os.path.join(checkpoint_folder, 'latest_checkpoint.pt'))
 
@@ -231,6 +234,13 @@ if __name__ == "__main__":
                                                                      evaluate_neg_edge_sampler=val_neg_edge_sampler,
                                                                      evaluate_data=val_data,
                                                                      loss_func=loss_func)
+
+            # 현재 validation metric 계산
+            current_val_metric = np.mean(val_losses)
+            if current_val_metric < best_val_metric:
+                best_val_metric = current_val_metric
+                # best model 저장
+                torch.save(checkpoint, os.path.join(checkpoint_folder, 'best_model.pt'))
 
             logger.info(
                 f'Epoch: {epoch + 1}, learning rate: {optimizer.param_groups[0]["lr"]}, train loss: {np.mean(train_losses):.4f}')
