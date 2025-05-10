@@ -418,8 +418,8 @@ def process_save_and_combine_motif_roles(graph_df: pd.DataFrame, num_snapshots: 
 def test():
     # Define dataset parameters
     dataset_name = "dummy" # Replace with your dataset name like "wikipedia" or "reddit"
-    val_ratio = 0.15
-    test_ratio = 0.15
+    val_ratio = 0.1
+    test_ratio = 0.1
     num_snapshots = 10 # Define the number of snapshots you want
 
     # Define the output path for the pickle file
