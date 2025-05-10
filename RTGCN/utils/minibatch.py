@@ -121,8 +121,10 @@ class MyDataset(Dataset):
                 node_2_all_time.append(node_2)
 
             # Convert lists to PyTorch tensors
-            node_1_list = [torch.LongTensor(node) for node in node_1_all_time]
-            node_2_list = [torch.LongTensor(node) for node in node_2_all_time]
+            # node_1_list = [torch.LongTensor(node) for node in node_1_all_time]
+            # node_2_list = [torch.LongTensor(node) for node in node_2_all_time]
+            node_1_list = [torch.tensor(node, dtype=torch.long) for node in node_1_all_time]
+            node_2_list = [torch.tensor(node, dtype=torch.long) for node in node_2_all_time]
 
             node_2_negative = []
             # Generate negative samples for each time step
@@ -136,7 +138,8 @@ class MyDataset(Dataset):
                                                                 distortion=0.75,
                                                                 unigrams=degree)
                 node_2_negative.append(node_negative)
-            node_2_neg_list = [torch.LongTensor(node) for node in node_2_negative]
+            # node_2_neg_list = [torch.LongTensor(node) for node in node_2_negative]
+            node_2_neg_list = [torch.tensor(node, dtype=torch.long) for node in node_2_negative]
             feed_dict['node_1']=node_1_list
             feed_dict['node_2']=node_2_list
             feed_dict['node_2_neg']=node_2_neg_list
