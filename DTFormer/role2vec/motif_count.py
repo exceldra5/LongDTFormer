@@ -150,7 +150,7 @@ class MotifCounterMachine(object):
 
             # Parallelize the processing of node_lists
             # Each item in node_lists (a list of nodes) is processed by _process_node_list_for_motif_counts
-            results = Parallel(n_jobs=self.n_jobs, backend="loky", verbose=5)(
+            results = Parallel(n_jobs=self.n_jobs, backend="loky", verbose=5, timeout=None)(
                 delayed(_process_node_list_for_motif_counts)(
                     nodes_list_item,
                     self.graph, # Pass the main graph
