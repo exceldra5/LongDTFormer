@@ -5,6 +5,7 @@ import pandas as pd
 import pickle
 import os
 import sys
+import glob
 
 
 class Data:
@@ -125,10 +126,16 @@ def get_link_prediction_data_with_roles(dataset_name: str, val_ratio: float, tes
 
     # Load node role data
     # node_role_data_path = f'./output/{dataset_name}/merged_snapshot_factorized_roles.pkl'
-    node_role_data_path = os.path.join(grandparent_dir, 'output', dataset_name, 'merged_snapshot_factorized_roles.pkl')
-    if not os.path.exists(node_role_data_path):
-        print(f"File {node_role_data_path} does not exist.")
-        return
+    # node_role_data_path = os.path.join(grandparent_dir, 'output', dataset_name, 'merged_snapshot_factorized_roles_.pkl')
+    dir_path = os.path.join(grandparent_dir, 'output', dataset_name)
+    pkl_files = glob.glob(os.path.join(dir_path, 'merged_snapshot_factorized_roles_*.pkl'))
+    if not pkl_files:
+        raise FileNotFoundError(f"No file matching 'merged_snapshot_factorized_roles_*.pkl' found in {dir_path}")
+    node_role_data_path = pkl_files[0]
+
+    # if not os.path.exists(node_role_data_path):
+    #     print(f"File {node_role_data_path} does not exist.")
+    #     return
     with open(node_role_data_path, "rb") as f:
         node_role_data = pickle.load(f)
 
