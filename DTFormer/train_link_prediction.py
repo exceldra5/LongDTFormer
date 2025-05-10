@@ -163,6 +163,38 @@ if __name__ == "__main__":
                 start_epoch = checkpoint['epoch']
                 best_val_metric = checkpoint.get('best_val_metric', float('inf'))
                 logger.info(f'체크포인트에서 복구: epoch {start_epoch}, best_val_metric: {best_val_metric}')
+                
+                # 학습이 완료된 경우 테스트만 실행
+                if start_epoch >= args.num_epochs:
+                    logger.info('학습이 완료되어 테스트만 실행합니다.')
+                    test_losses, test_metrics = test_model_link_prediction(model=model,
+                                                                         neighbor_sampler=full_neighbor_sampler,
+                                                                         evaluate_idx_data_loader=test_idx_data_loader,
+                                                                         evaluate_neg_edge_sampler=test_neg_edge_sampler,
+                                                                         evaluate_data=test_data,
+                                                                         loss_func=loss_func)
+                    
+                    logger.info(f'test loss: {np.mean(test_losses):.4f}')
+                    for metric_name in test_metrics[0].keys():
+                        average_test_metric = np.mean([test_metric[metric_name] for test_metric in test_metrics])
+                        logger.info(f'test {metric_name}, {average_test_metric:.4f}')
+                    
+                    # 결과 저장
+                    result_json = {
+                        "test metrics": {metric_name: f'{np.mean([test_metric[metric_name] for test_metric in test_metrics]):.4f}' 
+                                      for metric_name in test_metrics[0].keys()},
+                    }
+                    result_json = json.dumps(result_json, indent=4)
+                    
+                    save_result_folder = f"./saved_results/{args.model_name}/{args.dataset_name}"
+                    os.makedirs(save_result_folder, exist_ok=True)
+                    save_result_path = os.path.join(save_result_folder, f"{args.save_model_name}.json")
+                    
+                    with open(save_result_path, 'w') as file:
+                        file.write(result_json)
+                    
+                    sys.exit()
+                
             except Exception as e:
                 logger.warning(f'체크포인트 로드 실패: {str(e)}')
                 logger.info('새로운 학습을 시작합니다.')
