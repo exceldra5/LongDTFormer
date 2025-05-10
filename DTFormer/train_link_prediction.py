@@ -155,12 +155,19 @@ if __name__ == "__main__":
         start_epoch = 0
         best_val_metric = float('inf')
         if os.path.exists(os.path.join(checkpoint_folder, 'latest_checkpoint.pt')):
-            checkpoint = torch.load(os.path.join(checkpoint_folder, 'latest_checkpoint.pt'))
-            model.load_state_dict(checkpoint['model_state_dict'])
-            optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-            start_epoch = checkpoint['epoch']
-            best_val_metric = checkpoint.get('best_val_metric', float('inf'))
-            logger.info(f'체크포인트에서 복구: epoch {start_epoch}, best_val_metric: {best_val_metric}')
+            try:
+                # weights_only=False로 시도
+                checkpoint = torch.load(os.path.join(checkpoint_folder, 'latest_checkpoint.pt'), weights_only=False)
+                model.load_state_dict(checkpoint['model_state_dict'])
+                optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+                start_epoch = checkpoint['epoch']
+                best_val_metric = checkpoint.get('best_val_metric', float('inf'))
+                logger.info(f'체크포인트에서 복구: epoch {start_epoch}, best_val_metric: {best_val_metric}')
+            except Exception as e:
+                logger.warning(f'체크포인트 로드 실패: {str(e)}')
+                logger.info('새로운 학습을 시작합니다.')
+                start_epoch = 0
+                best_val_metric = float('inf')
 
         for epoch in range(start_epoch, args.num_epochs):
             model.train()
@@ -220,13 +227,16 @@ if __name__ == "__main__":
                     f'Epoch: {epoch + 1}, train for the {batch_idx + 1}-th batch, train loss: {loss.item()}')
 
             # 매 에포크마다 체크포인트 저장
-            checkpoint = {
-                'epoch': epoch + 1,
-                'model_state_dict': model.state_dict(),
-                'optimizer_state_dict': optimizer.state_dict(),
-                'best_val_metric': best_val_metric
-            }
-            torch.save(checkpoint, os.path.join(checkpoint_folder, 'latest_checkpoint.pt'))
+            try:
+                checkpoint = {
+                    'epoch': epoch + 1,
+                    'model_state_dict': model.state_dict(),
+                    'optimizer_state_dict': optimizer.state_dict(),
+                    'best_val_metric': best_val_metric
+                }
+                torch.save(checkpoint, os.path.join(checkpoint_folder, 'latest_checkpoint.pt'), weights_only=False)
+            except Exception as e:
+                logger.warning(f'체크포인트 저장 실패: {str(e)}')
 
             val_losses, val_metrics = evaluate_model_link_prediction(model=model,
                                                                      neighbor_sampler=full_neighbor_sampler,
