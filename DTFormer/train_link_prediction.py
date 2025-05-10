@@ -222,10 +222,12 @@ if __name__ == "__main__":
             for metric_name in val_metrics[0].keys():
                 val_metric_indicator.append(
                     (metric_name, np.mean([val_metric[metric_name] for val_metric in val_metrics]), True))
-            early_stop = early_stopping.step(val_metric_indicator, model)
+            
+            if args.early_stopping:
+                early_stop = early_stopping.step(val_metric_indicator, model)
 
-            if early_stop:
-                break
+                if early_stop:
+                    break
 
         # load the best model
         early_stopping.load_checkpoint(model)
