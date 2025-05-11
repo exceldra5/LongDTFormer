@@ -503,19 +503,27 @@ if __name__ == "__main__":
     # parse args
     parser = argparse.ArgumentParser(description="Get Motif Roles")
     parser.add_argument('--dataset', type=str, default='bitcoinotc', help='dataset name')
-    parser.add_argument('--val_ratio', type=float, default=0.15, help='validation data ratio')
-    parser.add_argument('--test_ratio', type=float, default=0.15, help='test data ratio')
-    parser.add_argument('--num_motifs', type=int, default=4, help='number of motifs')
+    parser.add_argument('--val_ratio', type=float, default=0.1, help='validation data ratio')
+    parser.add_argument('--test_ratio', type=float, default=0.1, help='test data ratio')
+    parser.add_argument('--num_jobs', type=int, default=1, help='number of jobs for parallel processing')
+    # parser.add_argument('--num_motifs', type=int, default=4, help='number of motifs')
     args = parser.parse_args()
     
     data_snapshots_num = {'bitcoinalpha': 274,
-                          'bitcoinotc': 279,
+                        #   'bitcoinotc': 279,
+                          'bitcoinotc': 100,
                           'CollegeMsg': 29,
                           'reddit-body': 178,
                           'reddit-title': 178,
                           'mathoverflow': 2350,
-                          'email-Eu-core': 803}
-    num_snapshots = data_snapshots_num[args.dataset] if args.dataset in data_snapshots_num else 10
+                        #   'email-Eu-core': 803,
+                          'email-Eu-core': 203,
+                          'uci': 29}
+    if args.dataset in data_snapshots_num:
+        num_snapshots = data_snapshots_num[args.dataset] 
+    else:
+        print(f"Dataset {args.dataset} not found in predefined snapshot numbers. Using default of 10.")
+        exit()
     
     args.graphlet_size = 4
     args.quantiles = 5

@@ -62,7 +62,10 @@ class MotifCounterMachine(object):
         """
         self.graph = graph
         self.args = args
-        self.n_jobs = os.cpu_count() // 2 - 4 if os.cpu_count() > 1 else 1 # Use all but one core, or 1 if only one
+        if args.num_jobs > 1:
+            self.n_jobs = args.num_jobs
+        else:
+            self.n_jobs = os.cpu_count() // 2 - 4 if os.cpu_count() > 1 else 1 # Use all but one core, or 1 if only one
 
     def create_edge_subsets(self):
         """
