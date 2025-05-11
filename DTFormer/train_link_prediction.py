@@ -182,7 +182,7 @@ if __name__ == "__main__":
                     # 결과 저장
                     result_json = {
                         "test metrics": {metric_name: f'{np.mean([test_metric[metric_name] for test_metric in test_metrics]):.4f}' 
-                                      for metric_name in test_metrics[0].keys()},
+                                      for metric_name in test_metrics[0].keys()} 
                     }
                     result_json = json.dumps(result_json, indent=4)
                     
@@ -266,7 +266,7 @@ if __name__ == "__main__":
                     'optimizer_state_dict': optimizer.state_dict(),
                     'best_val_metric': best_val_metric
                 }
-                torch.save(checkpoint, os.path.join(checkpoint_folder, 'latest_checkpoint.pt'), weights_only=False)
+                torch.save(checkpoint, os.path.join(checkpoint_folder, 'latest_checkpoint.pt'))
             except Exception as e:
                 logger.warning(f'체크포인트 저장 실패: {str(e)}')
 
