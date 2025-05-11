@@ -44,7 +44,8 @@ if __name__ == "__main__":
                           'reddit-title': 178,
                           'mathoverflow': 2350,
                           'email-Eu-core': 803,
-                          'DBLP3': 1000}
+                          'DBLP3': 1000,
+                          'DBLP5': 1000}
 
     # get data for training, validation and testing
     if args.dataset_name == 'DBLP3':
