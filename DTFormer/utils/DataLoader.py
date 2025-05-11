@@ -75,97 +75,102 @@ def get_link_prediction_data(dataset_name: str, val_ratio: float, test_ratio: fl
     :return: node_raw_features, edge_raw_features, (np.ndarray),
             full_data, train_data, val_data, test_data, new_node_val_data, new_node_test_data, (Data object)
     """
-    # Load data and train val test split
-    graph_df = pd.read_csv('./processed_data/{}/ml_{}.csv'.format(dataset_name, dataset_name))
-    edge_raw_features = np.load('./processed_data/{}/ml_{}.npy'.format(dataset_name, dataset_name))
-    node_raw_features = np.load('./processed_data/{}/ml_{}_node.npy'.format(dataset_name, dataset_name))
+    if dataset_name == 'DBLP3':
+        return load_dblp3_data()
+    elif dataset_name == 'DBLP5':
+        return load_dblp5_data()
+    else:
+        # Load data and train val test split
+        graph_df = pd.read_csv('./processed_data/{}/ml_{}.csv'.format(dataset_name, dataset_name))
+        edge_raw_features = np.load('./processed_data/{}/ml_{}.npy'.format(dataset_name, dataset_name))
+        node_raw_features = np.load('./processed_data/{}/ml_{}_node.npy'.format(dataset_name, dataset_name))
 
-    NODE_FEAT_DIM = EDGE_FEAT_DIM = 172
-    assert NODE_FEAT_DIM >= node_raw_features.shape[1], f'Node feature dimension in dataset {dataset_name} is bigger than {NODE_FEAT_DIM}!'
-    assert EDGE_FEAT_DIM >= edge_raw_features.shape[1], f'Edge feature dimension in dataset {dataset_name} is bigger than {EDGE_FEAT_DIM}!'
-    # padding the features of edges and nodes to the same dimension (172 for all the datasets)
-    if node_raw_features.shape[1] < NODE_FEAT_DIM:
-        node_zero_padding = np.zeros((node_raw_features.shape[0], NODE_FEAT_DIM - node_raw_features.shape[1]))
-        node_raw_features = np.concatenate([node_raw_features, node_zero_padding], axis=1)
-    if edge_raw_features.shape[1] < EDGE_FEAT_DIM:
-        edge_zero_padding = np.zeros((edge_raw_features.shape[0], EDGE_FEAT_DIM - edge_raw_features.shape[1]))
-        edge_raw_features = np.concatenate([edge_raw_features, edge_zero_padding], axis=1)
+        NODE_FEAT_DIM = EDGE_FEAT_DIM = 172
+        assert NODE_FEAT_DIM >= node_raw_features.shape[1], f'Node feature dimension in dataset {dataset_name} is bigger than {NODE_FEAT_DIM}!'
+        assert EDGE_FEAT_DIM >= edge_raw_features.shape[1], f'Edge feature dimension in dataset {dataset_name} is bigger than {EDGE_FEAT_DIM}!'
+        # padding the features of edges and nodes to the same dimension (172 for all the datasets)
+        if node_raw_features.shape[1] < NODE_FEAT_DIM:
+            node_zero_padding = np.zeros((node_raw_features.shape[0], NODE_FEAT_DIM - node_raw_features.shape[1]))
+            node_raw_features = np.concatenate([node_raw_features, node_zero_padding], axis=1)
+        if edge_raw_features.shape[1] < EDGE_FEAT_DIM:
+            edge_zero_padding = np.zeros((edge_raw_features.shape[0], EDGE_FEAT_DIM - edge_raw_features.shape[1]))
+            edge_raw_features = np.concatenate([edge_raw_features, edge_zero_padding], axis=1)
 
-    assert NODE_FEAT_DIM == node_raw_features.shape[1] and EDGE_FEAT_DIM == edge_raw_features.shape[1], 'Unaligned feature dimensions after feature padding!'
+        assert NODE_FEAT_DIM == node_raw_features.shape[1] and EDGE_FEAT_DIM == edge_raw_features.shape[1], 'Unaligned feature dimensions after feature padding!'
 
-    # get the timestamp of validate and test set
-    val_time, test_time = list(np.quantile(graph_df.ts, [(1 - val_ratio - test_ratio), (1 - test_ratio)]))
+        # get the timestamp of validate and test set
+        val_time, test_time = list(np.quantile(graph_df.ts, [(1 - val_ratio - test_ratio), (1 - test_ratio)]))
 
-    min_ts = graph_df['ts'].min()
-    max_ts = graph_df['ts'].max()
-    range_size = (max_ts - min_ts) / num_snapshots
+        min_ts = graph_df['ts'].min()
+        max_ts = graph_df['ts'].max()
+        range_size = (max_ts - min_ts) / num_snapshots
 
-    # from 1
-    graph_df['snapshots'] = ((graph_df['ts'] - min_ts) / range_size).astype(np.int16) + 1
+        # from 1
+        graph_df['snapshots'] = ((graph_df['ts'] - min_ts) / range_size).astype(np.int16) + 1
 
-    graph_df.loc[graph_df['snapshots'] >= num_snapshots, 'snapshots'] = num_snapshots
+        graph_df.loc[graph_df['snapshots'] >= num_snapshots, 'snapshots'] = num_snapshots
 
-    src_node_ids = graph_df.u.values.astype(np.longlong)
-    dst_node_ids = graph_df.i.values.astype(np.longlong)
-    node_interact_times = graph_df.ts.values.astype(np.float64)
-    edge_ids = graph_df.idx.values.astype(np.longlong)
-    labels = graph_df.label.values
-    snapshots = graph_df.snapshots.values
+        src_node_ids = graph_df.u.values.astype(np.longlong)
+        dst_node_ids = graph_df.i.values.astype(np.longlong)
+        node_interact_times = graph_df.ts.values.astype(np.float64)
+        edge_ids = graph_df.idx.values.astype(np.longlong)
+        labels = graph_df.label.values
+        snapshots = graph_df.snapshots.values
 
-    df_long = pd.concat([
-        graph_df.rename(columns={'u': 'node'})[['node', 'snapshots']],
-        graph_df.rename(columns={'i': 'node'})[['node', 'snapshots']]
-    ])
+        df_long = pd.concat([
+            graph_df.rename(columns={'u': 'node'})[['node', 'snapshots']],
+            graph_df.rename(columns={'i': 'node'})[['node', 'snapshots']]
+        ])
 
-    # count node appearance in each snapshot
-    node_counts_per_snapshot = df_long.groupby(['node', 'snapshots']).size().unstack(fill_value=0)
+        # count node appearance in each snapshot
+        node_counts_per_snapshot = df_long.groupby(['node', 'snapshots']).size().unstack(fill_value=0)
 
-    all_nodes = np.sort(np.unique(graph_df[['u', 'i']].values))
-    # all_snapshots = np.sort(graph_df['snapshots'].unique())
-    all_snapshots = np.arange(1, num_snapshots + 1)
+        all_nodes = np.sort(np.unique(graph_df[['u', 'i']].values))
+        # all_snapshots = np.sort(graph_df['snapshots'].unique())
+        all_snapshots = np.arange(1, num_snapshots + 1)
 
-    node_counts_per_snapshot = node_counts_per_snapshot.reindex(index=all_nodes, columns=all_snapshots, fill_value=0)
+        node_counts_per_snapshot = node_counts_per_snapshot.reindex(index=all_nodes, columns=all_snapshots, fill_value=0)
 
-    node_snap_counts = node_counts_per_snapshot.values
+        node_snap_counts = node_counts_per_snapshot.values
 
-    zero_vector = np.zeros((1, node_snap_counts.shape[1]))
+        zero_vector = np.zeros((1, node_snap_counts.shape[1]))
 
-    node_snap_counts = np.vstack([zero_vector, node_snap_counts])
+        node_snap_counts = np.vstack([zero_vector, node_snap_counts])
 
-    full_data = Data(src_node_ids=src_node_ids, dst_node_ids=dst_node_ids, node_interact_times=node_interact_times, edge_ids=edge_ids, labels=labels, snapshots=snapshots)
+        full_data = Data(src_node_ids=src_node_ids, dst_node_ids=dst_node_ids, node_interact_times=node_interact_times, edge_ids=edge_ids, labels=labels, snapshots=snapshots)
 
-    # the setting of seed follows previous works
-    random.seed(2020)
+        # the setting of seed follows previous works
+        random.seed(2020)
 
-    # union to get node set
-    node_set = set(src_node_ids) | set(dst_node_ids)
-    num_total_unique_node_ids = len(node_set)
+        # union to get node set
+        node_set = set(src_node_ids) | set(dst_node_ids)
+        num_total_unique_node_ids = len(node_set)
 
-    train_mask = (node_interact_times <= val_time)
+        train_mask = (node_interact_times <= val_time)
 
-    train_data = Data(src_node_ids=src_node_ids[train_mask], dst_node_ids=dst_node_ids[train_mask],
-                      node_interact_times=node_interact_times[train_mask],
-                      edge_ids=edge_ids[train_mask], labels=labels[train_mask], snapshots=snapshots[train_mask])
+        train_data = Data(src_node_ids=src_node_ids[train_mask], dst_node_ids=dst_node_ids[train_mask],
+                          node_interact_times=node_interact_times[train_mask],
+                          edge_ids=edge_ids[train_mask], labels=labels[train_mask], snapshots=snapshots[train_mask])
 
-    val_mask = np.logical_and(node_interact_times <= test_time, node_interact_times > val_time)
-    test_mask = node_interact_times > test_time
+        val_mask = np.logical_and(node_interact_times <= test_time, node_interact_times > val_time)
+        test_mask = node_interact_times > test_time
 
-    # validation and test data
-    val_data = Data(src_node_ids=src_node_ids[val_mask], dst_node_ids=dst_node_ids[val_mask],
-                    node_interact_times=node_interact_times[val_mask], edge_ids=edge_ids[val_mask], labels=labels[val_mask], snapshots=snapshots[val_mask])
+        # validation and test data
+        val_data = Data(src_node_ids=src_node_ids[val_mask], dst_node_ids=dst_node_ids[val_mask],
+                        node_interact_times=node_interact_times[val_mask], edge_ids=edge_ids[val_mask], labels=labels[val_mask], snapshots=snapshots[val_mask])
 
-    test_data = Data(src_node_ids=src_node_ids[test_mask], dst_node_ids=dst_node_ids[test_mask],
-                     node_interact_times=node_interact_times[test_mask], edge_ids=edge_ids[test_mask], labels=labels[test_mask], snapshots=snapshots[test_mask])
+        test_data = Data(src_node_ids=src_node_ids[test_mask], dst_node_ids=dst_node_ids[test_mask],
+                         node_interact_times=node_interact_times[test_mask], edge_ids=edge_ids[test_mask], labels=labels[test_mask], snapshots=snapshots[test_mask])
 
-    print("The dataset has {} interactions, involving {} different nodes".format(full_data.num_interactions, full_data.num_unique_nodes))
-    print("The training dataset has {} interactions, involving {} different nodes".format(
-        train_data.num_interactions, train_data.num_unique_nodes))
-    print("The validation dataset has {} interactions, involving {} different nodes".format(
-        val_data.num_interactions, val_data.num_unique_nodes))
-    print("The test dataset has {} interactions, involving {} different nodes".format(
-        test_data.num_interactions, test_data.num_unique_nodes))
+        print("The dataset has {} interactions, involving {} different nodes".format(full_data.num_interactions, full_data.num_unique_nodes))
+        print("The training dataset has {} interactions, involving {} different nodes".format(
+            train_data.num_interactions, train_data.num_unique_nodes))
+        print("The validation dataset has {} interactions, involving {} different nodes".format(
+            val_data.num_interactions, val_data.num_unique_nodes))
+        print("The test dataset has {} interactions, involving {} different nodes".format(
+            test_data.num_interactions, test_data.num_unique_nodes))
 
-    return node_raw_features, edge_raw_features, full_data, train_data, val_data, test_data, None, None, node_snap_counts
+        return node_raw_features, edge_raw_features, full_data, train_data, val_data, test_data, None, None, node_snap_counts
 
 
 def load_dblp3_data():
@@ -270,3 +275,99 @@ def load_dblp3_data():
     )
     
     return node_features, edge_features, full_data, train_data, val_data, test_data, None, None, node_snap_counts
+
+
+def load_dblp5_data():
+    """
+    RTGCN의 DBLP5 데이터를 DTFormer 형식으로 로드합니다.
+    """
+    import numpy as np
+    from scipy.sparse import csr_matrix
+    
+    # DBLP5.npz 파일 로드
+    data = np.load('RTGCN/data/DBLP5/DBLP5.npz')
+    
+    # 데이터 추출
+    adjs = data['adjs']  # 인접 행렬
+    attmats = data['attmats']  # 노드 특성
+    labels = data['labels']  # 노드 레이블
+    
+    num_nodes = adjs.shape[1]  # 노드 수
+    num_timesteps = adjs.shape[0]  # 타임스텝 수
+    
+    # 노드 특성을 DTFormer 형식으로 변환
+    node_features = np.zeros((num_nodes, 172))  # DTFormer는 172차원 특성을 사용
+    node_features[:, :100] = attmats[:, -1, :]  # 마지막 타임스텝의 특성 사용
+    
+    # 엣지 특성 생성 (더미 특성)
+    edge_features = np.zeros((num_nodes * num_nodes, 172))  # 모든 가능한 엣지에 대한 특성
+    
+    # 엣지 정보 생성
+    edge_list = []
+    edge_times = []
+    
+    for t in range(num_timesteps):
+        # 현재 타임스텝의 인접 행렬
+        adj_matrix = adjs[t]
+        # 엣지가 있는 위치 찾기
+        src_nodes, dst_nodes = np.nonzero(adj_matrix)
+        
+        # 현재 타임스텝의 엣지 추가
+        edge_list.extend(list(zip(src_nodes, dst_nodes)))
+        edge_times.extend([t] * len(src_nodes))
+    
+    edge_list = np.array(edge_list)
+    edge_times = np.array(edge_times)
+    
+    # 시간 정규화
+    edge_times = (edge_times - edge_times.min()) / (edge_times.max() - edge_times.min())
+    
+    # 데이터 분할 (train: 0.7, val: 0.15, test: 0.15)
+    num_edges = len(edge_times)
+    indices = np.random.permutation(num_edges)
+    train_size = int(0.7 * num_edges)
+    val_size = int(0.15 * num_edges)
+    
+    train_indices = indices[:train_size]
+    val_indices = indices[train_size:train_size + val_size]
+    test_indices = indices[train_size + val_size:]
+    
+    # Data 클래스 인스턴스 생성
+    train_data = Data(
+        src_node_ids=edge_list[train_indices, 0],
+        dst_node_ids=edge_list[train_indices, 1],
+        node_interact_times=edge_times[train_indices],
+        edge_ids=train_indices,
+        labels=np.ones(len(train_indices)),  # 모든 엣지는 양성 샘플
+        snapshots=np.ones(len(train_indices))  # 스냅샷 정보는 1로 설정
+    )
+    
+    val_data = Data(
+        src_node_ids=edge_list[val_indices, 0],
+        dst_node_ids=edge_list[val_indices, 1],
+        node_interact_times=edge_times[val_indices],
+        edge_ids=val_indices,
+        labels=np.ones(len(val_indices)),
+        snapshots=np.ones(len(val_indices))
+    )
+    
+    test_data = Data(
+        src_node_ids=edge_list[test_indices, 0],
+        dst_node_ids=edge_list[test_indices, 1],
+        node_interact_times=edge_times[test_indices],
+        edge_ids=test_indices,
+        labels=np.ones(len(test_indices)),
+        snapshots=np.ones(len(test_indices))
+    )
+    
+    # 전체 데이터셋
+    full_data = Data(
+        src_node_ids=edge_list[:, 0],
+        dst_node_ids=edge_list[:, 1],
+        node_interact_times=edge_times,
+        edge_ids=np.arange(len(edge_times)),
+        labels=np.ones(len(edge_times)),
+        snapshots=np.ones(len(edge_times))
+    )
+    
+    return node_features, edge_features, full_data, train_data, val_data, test_data, None, None, None

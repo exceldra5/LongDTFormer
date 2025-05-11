@@ -12,7 +12,7 @@ def get_link_prediction_args(is_evaluation: bool = False):
     # arguments
     parser = argparse.ArgumentParser('Interface for the link prediction task')
     parser.add_argument('--dataset_name', type=str, help='dataset to be used',
-                        choices=['bitcoinalpha', 'bitcoinotc', 'CollegeMsg', 'reddit-body', 'reddit-title', 'mathoverflow', 'email-Eu-core', 'DBLP3'],
+                        choices=['bitcoinalpha', 'bitcoinotc', 'CollegeMsg', 'reddit-body', 'reddit-title', 'mathoverflow', 'email-Eu-core', 'DBLP3', 'DBLP5'],
                         default='bitcoinalpha')
     parser.add_argument('--batch_size', type=int, default=200, help='batch size')
     parser.add_argument('--model_name', type=str, default='DTFormer', help='name of the model, note that EdgeBank is only applicable for evaluation')
