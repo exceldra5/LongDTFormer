@@ -81,6 +81,7 @@ def get_role_idx_data_loader(
     batch_size: int):
         
     # select batch_size indices from train_data_indices
+    batch_size = min(batch_size, len(train_data_indices))
     selected_indices = np.random.choice(train_data_indices, size=batch_size, replace=False)
     batch_src_node_ids = train_data.src_node_ids[selected_indices]
     batch_src_node_snapshots = train_data.snapshots[selected_indices]
@@ -105,7 +106,7 @@ def get_role_idx_data_loader(
     return batch_src_node_ids, batch_src_node_snapshots, batch_src_node_roles, batch_src_same_role_node_ids, selected_indices
 
 
-def get_link_prediction_data_with_roles(dataset_name: str, val_ratio: float, test_ratio: float, num_snapshots: int):
+def get_link_prediction_data_with_roles(dataset_name: str, val_ratio: float, test_ratio: float, num_snapshots: int, role_dataset: str):
     """
     generate data for link prediction task (inductive & transductive settings)
     :param dataset_name: str, dataset name
@@ -128,10 +129,11 @@ def get_link_prediction_data_with_roles(dataset_name: str, val_ratio: float, tes
     # node_role_data_path = f'./output/{dataset_name}/merged_snapshot_factorized_roles.pkl'
     # node_role_data_path = os.path.join(grandparent_dir, 'output', dataset_name, 'merged_snapshot_factorized_roles_.pkl')
     dir_path = os.path.join(grandparent_dir, 'output', dataset_name)
-    pkl_files = glob.glob(os.path.join(dir_path, 'merged_snapshot_factorized_roles_*.pkl'))
-    if not pkl_files:
-        raise FileNotFoundError(f"No file matching 'merged_snapshot_factorized_roles_*.pkl' found in {dir_path}")
-    node_role_data_path = pkl_files[0]
+    # pkl_files = glob.glob(os.path.join(dir_path, 'merged_snapshot_factorized_roles*.pkl'))
+    # if not pkl_files:
+    #     raise FileNotFoundError(f"No file matching 'merged_snapshot_factorized_roles*.pkl' found in {dir_path}")
+    # node_role_data_path = pkl_files[0]
+    node_role_data_path = os.path.join(dir_path, role_dataset)
 
     # if not os.path.exists(node_role_data_path):
     #     print(f"File {node_role_data_path} does not exist.")

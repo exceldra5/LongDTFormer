@@ -48,7 +48,7 @@ if __name__ == "__main__":
     # get data for training, validation and testing
     node_raw_features, edge_raw_features, full_data, train_data, val_data, test_data, _, _, node_snap_counts, graph_df = \
         get_link_prediction_data_with_roles(dataset_name=args.dataset_name, val_ratio=args.val_ratio, test_ratio=args.test_ratio,
-                                 num_snapshots=data_snapshots_num[args.dataset_name])
+                                 num_snapshots=data_snapshots_num[args.dataset_name], role_dataset=args.role_dataset)
 
     # initialize training neighbor sampler to retrieve temporal graph
     train_neighbor_sampler = get_neighbor_sampler(data=train_data,
@@ -85,15 +85,21 @@ if __name__ == "__main__":
 
         args.seed = run
         args.save_model_name = f'{args.model_name}_seed{args.seed}'
+        
+        # Create a unique timestamp for this run's subdirectory
+        run_timestamp = time.strftime("%Y%m%d_%H%M%S")
+        run_log_dir = f"./logs_role/{args.model_name}/{args.dataset_name}-{run_timestamp}/{args.save_model_name}/"
+        run_model_dir = f"./saved_models/{args.model_name}/{args.dataset_name}-{run_timestamp}/{args.save_model_name}/"
+        run_results_dir = f"./saved_results/{args.model_name}/{args.dataset_name}-{run_timestamp}/{args.save_model_name}/"
 
         # set up logger
         logging.basicConfig(level=logging.INFO)
         logger = logging.getLogger()
         logger.setLevel(logging.DEBUG)
-        os.makedirs(f"./logs_role/{args.model_name}/{args.dataset_name}/{args.save_model_name}/", exist_ok=True)
+        os.makedirs(f"./logs_role/{args.model_name}/{args.dataset_name}-{run_timestamp}/{args.save_model_name}/", exist_ok=True)
         # create file handler that logs debug and higher level messages
         fh = logging.FileHandler(
-            f"./logs_role/{args.model_name}/{args.dataset_name}/{args.save_model_name}/{str(time.time())}.log")
+            f"./logs_role/{args.model_name}/{args.dataset_name}-{run_timestamp}/{args.save_model_name}/{str(time.time())}.log")
         fh.setLevel(logging.DEBUG)
         # create console handler with a higher log level
         ch = logging.StreamHandler()
@@ -133,11 +139,11 @@ if __name__ == "__main__":
 
         model = convert_to_gpu(model, device=args.device)
 
-        save_model_folder = f"./saved_models/{args.model_name}/{args.dataset_name}/{args.save_model_name}/"
-        shutil.rmtree(save_model_folder, ignore_errors=True)
-        os.makedirs(save_model_folder, exist_ok=True)
+        # save_model_folder = f"./saved_models/{args.model_name}/{args.dataset_name}/{args.save_model_name}/"
+        shutil.rmtree(run_model_dir, ignore_errors=True)
+        os.makedirs(run_model_dir, exist_ok=True)
 
-        early_stopping = EarlyStopping(patience=args.patience, save_model_folder=save_model_folder,
+        early_stopping = EarlyStopping(patience=args.patience, save_model_folder=run_model_dir,
                                        save_model_name=args.save_model_name, logger=logger, model_name=args.model_name)
 
         loss_func = nn.BCELoss()
@@ -165,7 +171,7 @@ if __name__ == "__main__":
                 
                 # get same role nodes
                 batch_src_node_ids_for_role, batch_src_node_snapshots_for_role, batch_src_node_roles_for_role, batch_src_same_role_node_ids_for_role, selected_src_node_indices_for_role = \
-                    get_role_idx_data_loader(train_data_indices=train_data_indices, train_data=train_data, graph_df=graph_df, batch_size=args.batch_size // 10) 
+                    get_role_idx_data_loader(train_data_indices=train_data_indices, train_data=train_data, graph_df=graph_df, batch_size=args.role_batch_size) 
                     # NOTE(wsgwak): Tuning the batch size for role sampling
                     # Currently, it is set to 1/10 of the original batch size
 
@@ -237,6 +243,11 @@ if __name__ == "__main__":
                 logger.info(
                     f'validate {metric_name}, {np.mean([val_metric[metric_name] for val_metric in val_metrics]):.4f}')
 
+            # Save checkpoint for the current epoch BEFORE early stopping check
+            epoch_model_path = os.path.join(run_model_dir, f"epoch_{epoch+1}.pkl")
+            torch.save(model.state_dict(), epoch_model_path)
+            logger.info(f"Saved model checkpoint for epoch {epoch+1} to {epoch_model_path}")
+
             # select the best model based on all the validate metrics
             val_metric_indicator = []
             for metric_name in val_metrics[0].keys():
@@ -244,7 +255,8 @@ if __name__ == "__main__":
                     (metric_name, np.mean([val_metric[metric_name] for val_metric in val_metrics]), True))
             early_stop = early_stopping.step(val_metric_indicator, model)
 
-            if early_stop:
+            if args.early_stopping & early_stop:
+                logger.info(f"Early stopping triggered at epoch {epoch + 1}")
                 break
 
         # load the best model
@@ -284,9 +296,9 @@ if __name__ == "__main__":
         }
         result_json = json.dumps(result_json, indent=4)
 
-        save_result_folder = f"./saved_results/{args.model_name}/{args.dataset_name}"
-        os.makedirs(save_result_folder, exist_ok=True)
-        save_result_path = os.path.join(save_result_folder, f"{args.save_model_name}.json")
+        # save_result_folder = f"./saved_results/{args.model_name}/{args.dataset_name}"
+        os.makedirs(run_results_dir, exist_ok=True)
+        save_result_path = os.path.join(run_results_dir, f"{args.save_model_name}.json")
 
         with open(save_result_path, 'w') as file:
             file.write(result_json)

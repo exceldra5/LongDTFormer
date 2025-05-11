@@ -54,7 +54,10 @@ def get_link_prediction_args(is_evaluation: bool = False):
     parser.add_argument('--intersect_mode', type=str, help='how to compute intersect feature', default='sum',
                         choices=['sum', 'mlp', 'gru'])
     
+    # Added argmuents
     parser.add_argument('--early_stopping', action='store_true', help='whether to use early stopping')
+    parser.add_argument('--role_batch_size', type=int, default=20, help='batch size for role-based sampling')
+    parser.add_argument('--role_dataset', type=str, help='dataset for role-based sampling')
 
     try:
         args = parser.parse_args()
