@@ -37,13 +37,16 @@ if __name__ == "__main__":
     if args.using_snap_counts:
         feat_using.append('snap_counts')
 
+    # NOTE(wsgwak): Enable to use custom snapshot number
     data_snapshots_num = {'bitcoinalpha': 274,
-                          'bitcoinotc': 279,
+                        #   'bitcoinotc': 279,
+                          'bitcoinotc': 100,
                           'CollegeMsg': 29,
                           'reddit-body': 178,
                           'reddit-title': 178,
                           'mathoverflow': 2350,
-                          'email-Eu-core': 803}
+                        #   'email-Eu-core': 803}
+                          'email-Eu-core': 203}
 
     # get data for training, validation and testing
     node_raw_features, edge_raw_features, full_data, train_data, val_data, test_data, _, _, node_snap_counts, graph_df = \
@@ -79,6 +82,12 @@ if __name__ == "__main__":
 
     val_metric_all_runs, test_metric_all_runs = [], []
 
+    # Create a unique timestamp for this run's subdirectory
+    run_timestamp = time.strftime("%Y%m%d_%H%M%S")
+    run_log_dir_dir = f"./logs_role/{args.model_name}/{args.dataset_name}-{run_timestamp}/{args.save_model_name}/"
+    run_model_dir_dir = f"./saved_models/{args.model_name}/{args.dataset_name}-{run_timestamp}/{args.save_model_name}/"
+    run_results_dir_dir = f"./saved_results/{args.model_name}/{args.dataset_name}-{run_timestamp}/{args.save_model_name}/"
+
     for run in range(args.num_runs):
 
         set_random_seed(seed=run)
@@ -88,9 +97,9 @@ if __name__ == "__main__":
         
         # Create a unique timestamp for this run's subdirectory
         run_timestamp = time.strftime("%Y%m%d_%H%M%S")
-        run_log_dir = f"./logs_role/{args.model_name}/{args.dataset_name}-{run_timestamp}/{args.save_model_name}/"
-        run_model_dir = f"./saved_models/{args.model_name}/{args.dataset_name}-{run_timestamp}/{args.save_model_name}/"
-        run_results_dir = f"./saved_results/{args.model_name}/{args.dataset_name}-{run_timestamp}/{args.save_model_name}/"
+        run_log_dir = f"{run_log_dir_dir}/{args.save_model_name}/"
+        run_model_dir = f"{run_model_dir_dir}/{args.save_model_name}/"
+        run_results_dir = f"{run_results_dir_dir}/{args.save_model_name}/"
 
         # set up logger
         logging.basicConfig(level=logging.INFO)
