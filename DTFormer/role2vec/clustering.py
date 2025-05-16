@@ -143,9 +143,6 @@ class MockMotifMachine:
 
         n_clusters = 0
         min_clusters_search = 2
-        max_clusters_search = min(self.args.clusters_max_search, factors.shape[0] - 1, factors.shape[1] if factors.shape[1] > 0 else 0)
-        max_clusters_search = max(max_clusters_search, min_clusters_search)
-
 
         if self.args.cluster_method == 'node_based':
             n_clusters = max(min_clusters_search, len(self.graph.nodes()) // 100)
@@ -153,6 +150,9 @@ class MockMotifMachine:
             print(f"Using node-based clustering: {n_clusters} clusters requested.")
 
         elif self.args.cluster_method == 'auto':
+            max_clusters_search = min(self.args.clusters_max_search, factors.shape[0] - 1, factors.shape[1] if factors.shape[1] > 0 else 0)
+            max_clusters_search = max(max_clusters_search, min_clusters_search)
+
             n_clusters = find_optimal_clusters(
                 factors,
                 min_clusters=min_clusters_search,
@@ -160,11 +160,24 @@ class MockMotifMachine:
                 random_state=self.args.seed,
                 n_init=10
             )
-            if factors.shape[0] >= 2:
-                 n_clusters = max(n_clusters, 2)
-            else:
-                 n_clusters = 1
-
+            # if factors.shape[0] >= 2:
+            #      n_clusters = max(n_clusters, 2)
+            # else:
+            #      n_clusters = 1
+        elif self.args.cluster_method == 'max':
+            max_clusters_search = self.args.clusters_max_search
+            
+            n_clusters = find_optimal_clusters(
+                factors,
+                min_clusters=min_clusters_search,
+                max_clusters=max_clusters_search,
+                random_state=self.args.seed,
+                n_init=10
+            )
+            # if factors.shape[0] >= 2:
+            #      n_clusters = max(n_clusters, 2)
+            # else:
+            #      n_clusters = 1
         else:
             raise ValueError(f"Unknown cluster_method: {self.args.cluster_method}. Must be 'node_based' or 'auto'.")
 
@@ -421,7 +434,7 @@ def process_snapshot_for_factorization(snapshot_id: int, graph_df: pd.DataFrame,
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Factorize motif roles for each snapshot")
     parser.add_argument('--dataset', type=str, default='CollegeMsg', help='Dataset name')
-    parser.add_argument('--cluster-method', type=str, default='node_based', choices=['node_based', 'auto'],
+    parser.add_argument('--cluster-method', type=str, default='node_based', choices=['node_based', 'auto', 'max'],
                         help="Method to determine n_clusters: 'node_based' (num_nodes//100) or 'auto' (silhouette score). Default: node_based")
     parser.add_argument('--clusters-max-search', type=int, default=100,
                         help="Maximum number of clusters to search for in 'auto' method. Default: 100")

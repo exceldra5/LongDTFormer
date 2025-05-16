@@ -1,5 +1,4 @@
-# DTFormer: A Transformer-Based Method for Discrete-Time Dynamic Graph Representation Learning
-Codes for the paper: [DTFormer: A Transformer-Based Method for Discrete-Time Dynamic Graph Representation Learning](https://arxiv.org/abs/2407.18523).
+# RoleFormer : Role-aware Expansion of Graph Transformer for Temporal Graph Embedding
 
 
 ## Datasets
@@ -21,31 +20,7 @@ You can use ``--intersect_mode`` to change the modes for modeling the Neighbor I
 ``--num_patch_size`` is used to control the multi-patching module, please read our paper for more detail.
 
 ## Acknowledgments
-This repository is based on the code from [DyGLib](https://github.com/yule-BUAA/DyGLib).
-
-We thank the author for making their code open-source.
+This repository is based on the code from [DyGLib](https://github.com/yule-BUAA/DyGLib) and [DTFormer] (https://github.com/chenxi1228/DTFormer/tree/main)
 
 
-## Citation
 
-Please consider citing our paper when using this project.
-
-```{bibtex}
-@inproceedings{chen2024dtformer,
-  title={DTFormer: A Transformer-Based Method for Discrete-Time Dynamic Graph Representation Learning},
-  author={Chen, Xi and Xiong, Yun and Zhang, Siwei and Zhang, Jiawei and Zhang, Yao and Zhou, Shiyang and Wu, Xixi and Zhang, Mingyang and Liu, Tengfei and Wang, Weiqiang},
-  booktitle={Proceedings of the 33rd ACM International Conference on Information and Knowledge Management},
-  pages={301--311},
-  year={2024}
-}
-```
-or
-
-```{bibtex}
-@article{chen2024dtformer,
-  title={DTFormer: A Transformer-Based Method for Discrete-Time Dynamic Graph Representation Learning},
-  author={Chen, Xi and Xiong, Yun and Zhang, Siwei and Zhang, Jiawei and Zhang, Yao and Zhou, Shiyang and Wu, Xixi and Zhang, Mingyang and Liu, Tengfei and Wang, Weiqiang},
-  journal={arXiv preprint arXiv:2407.18523},
-  year={2024}
-}
-```

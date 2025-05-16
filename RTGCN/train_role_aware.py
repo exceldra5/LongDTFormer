@@ -7,7 +7,7 @@ import scipy
 from torch.utils.data import DataLoader
 
 from utils.preprocess import load_graphs, get_context_pairs, get_evaluation_data,get_evaluation_classification_data
-from utils.minibatch import  MyDataset
+from utils.minibatch import  MyDatasetRole
 from utils.utilities import to_device
 from eval.link_prediction import evaluate_classifier
 from models.model import RTGCN
@@ -84,7 +84,7 @@ if __name__ == "__main__":
     task=args.task
 
     # Setup device for model training
-    device = torch.device("cuda:0" if torch.cuda.is_available() else 'cpu')
+    device = torch.device(f"cuda:{args.GPU_ID}" if torch.cuda.is_available() else 'cpu')
 
     #load  structural role data
     role_path = './data/DBLP3/DBLP3_wl_nc.pkl'
@@ -153,12 +153,12 @@ if __name__ == "__main__":
     adjs[args.time_steps-1] = nx.adjacency_matrix(new_G)
 
     # build dataloader and model
-    dataset = MyDataset(args, graphs, feats, adjs, context_pairs_train)
+    dataset = MyDatasetRole(args, graphs, feats, adjs, context_pairs_train, train_role_graph)
     dataloader = DataLoader(dataset,
                             batch_size=args.batch_size, 
                             shuffle=True, 
                             num_workers=0,
-                            collate_fn=MyDataset.collate_fn)
+                            collate_fn=MyDatasetRole.collate_fn)
     model = RTGCN(act=nn.ELU(),
                           n_node=args.node_num,
                           input_dim=args.input_dim,

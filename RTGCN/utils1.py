@@ -36,6 +36,7 @@ def set_random_seed(seed=0):
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed) # check its effect
     torch.backends.cudnn.benchmark = False
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.enabled = False
