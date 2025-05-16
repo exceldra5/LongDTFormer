@@ -34,6 +34,8 @@ def inductive_graph(graph_former, graph_later):
 
  # Experimental settings
 if __name__ == "__main__":
+    set_random_seed(0)
+    
     parser = argparse.ArgumentParser()
     parser.add_argument('--time_steps', type=int, nargs='?', default=3,
                         help="total time steps used for train, eval and test")
