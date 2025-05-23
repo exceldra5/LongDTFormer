@@ -1,396 +1,251 @@
-import random
-
 import torch
-import numpy as np
-import scipy.sparse as sp
-import torch_geometric as tg
 from torch.utils.data import Dataset
 from torch_geometric.data import Data
+import torch_geometric.utils as tg_utils
+import numpy as np
+# import scipy.sparse as sp # DO NOT USE IT!!! This is non deterministic
 
-from utils.utilities import fixed_unigram_candidate_sampler, fixed_unigram_candidate_role_aware_sampler
+# Assuming fixed_unigram_candidate_sampler is correctly refactored in utilities
+from utils.utilities import fixed_unigram_candidate_sampler
+
 
 class MyDataset(Dataset):
-    def __init__(self, args, graphs, features, adjs,  context_pairs):
+    def __init__(self, args, graphs_repr_list, raw_features_list, raw_adjs_np_list, context_pairs):
         """
-        Initialize the dataset with graphs, features, adjacency matrices, and context pairs.
+        args: Experiment arguments.
+        graphs_repr_list: List of dicts, [{'edge_index': tensor, 'num_nodes': int}, ...].
+        raw_features_list: List of NumPy arrays (node features per snapshot).
+        raw_adjs_np_list: List of NumPy adjacency matrices (for normalization & weights).
+        context_pairs: List of defaultdicts (context pairs per snapshot).
         """
         super(MyDataset, self).__init__()
         self.args = args
-        self.graphs = graphs
-        self.features = [self._preprocess_features(feat) for feat in features]
-        self.adjs = [self._normalize_graph_gcn(a)  for a  in adjs]
-        self.time_steps = args.time_steps
-        self.context_pairs = context_pairs
-        self.max_positive = args.neg_sample_size
-        self.train_nodes = list(self.graphs[self.time_steps-1].nodes()) # all nodes in the graph.
-        self.min_t = max(self.time_steps - self.args.window - 1, 0) if args.window > 0 else 0
-        self.degs = self.construct_degs()
-        self.pyg_graphs = self._build_pyg_graphs()
-        self.__createitems__()
+        self.graphs_repr = graphs_repr_list # Store for reference, e.g., num_nodes
+        self.device = args.device if hasattr(args, 'device') else \
+                      (torch.device("cuda" if torch.cuda.is_available() else "cpu"))
+        self.features = [self._preprocess_features(feat_np) for feat_np in raw_features_list]
 
-    def _normalize_graph_gcn(self, adj):
-        """
-        Normalize the adjacency matrix using the GCN formula.
-        """
-        adj = sp.coo_matrix(adj, dtype=np.float32)
-        adj_ = adj + sp.eye(adj.shape[0], dtype=np.float32)
-        rowsum = np.array(adj_.sum(1), dtype=np.float32)
-        degree_mat_inv_sqrt = sp.diags(np.power(rowsum, -0.5).flatten(), dtype=np.float32)
-        adj_normalized = adj_.dot(degree_mat_inv_sqrt).transpose().dot(degree_mat_inv_sqrt).tocoo()
-        return adj_normalized
+        # Normalize adjacency matrices (graphs) using GCN formula
+        self.normalized_graphs_pyg = []
+        for i in range(len(raw_adjs_np_list)):
+            adj_np = raw_adjs_np_list[i]
+            num_nodes = self.graphs_repr[i]['num_nodes'] # Or adj_np.shape[0]
+            
+            # Convert adj_np to edge_index and edge_weights
+            # Assuming adj_np can contain weights other than 0/1
+            rows, cols = np.where(adj_np > 0) # Or a threshold if weights are continuous
+            edge_index_unnormalized = torch.from_numpy(np.vstack((rows, cols))).long().to(self.device)
+            edge_weights_unnormalized = torch.from_numpy(adj_np[rows, cols]).float().to(self.device)
 
-    def _preprocess_features(self, features):
-        """
-        Row-normalize feature matrix and convert to tuple representation
-        """
-        features = np.array(features)
-        rowsum = np.array(features.sum(1))
-        r_inv = np.power(rowsum, -1).flatten()
-        r_inv[np.isinf(r_inv)] = 0.
-        r_mat_inv = sp.diags(r_inv)
-        features = r_mat_inv.dot(features)
-        return features
-
-    def construct_degs(self):
-        """
-        Compute node degrees in each graph snapshot
-        """
-        degs = []
-        for i in range(self.min_t, self.time_steps):
-            G = self.graphs[i]
-            deg = []
-            for nodeid in G.nodes():
-                deg.append(G.degree(nodeid))
-            degs.append(deg)
-        return degs
-
-    def _build_pyg_graphs(self):
-        """
-        Construct PyTorch Geometric graph data objects from the adjacency matrices and features.
-        This method converts each graph in the dataset to the PyTorch Geometric format, which is
-        used for graph neural network models in PyTorch.
-        """
-        pyg_graphs = []
-        for feat, adj in zip(self.features, self.adjs):
-            x = torch.Tensor(feat)
-            edge_index, edge_weight = tg.utils.from_scipy_sparse_matrix(adj)
-            data = Data(x=x, edge_index=edge_index, edge_weight=edge_weight)
-            pyg_graphs.append(data)
-        return pyg_graphs
-
-    def __len__(self):
-        """
-        Return the total number of nodes in the last snapshot.
-        """
-        return len(self.train_nodes)
-    def end(self):
-        return self.batch_num * self.batch_size >= len(self.train_nodes)
-
-    def __getitem__(self, index):
-        """
-        Fetch the pre-computed data items for the node at the specified index.
-        """
-        node = self.train_nodes[index]
-        return self.data_items[node]
-    
-    def __createitems__(self):
-        """
-        Prepares the dataset items for training by constructing positive and negative context pairs
-        for each node over different time steps. It handles temporal relationships and negative sampling.
-        """
-        self.data_items = {}
-
-        # Iterate over all nodes in the last snapshot of the graph series
-        for node in list(self.graphs[self.time_steps-1].nodes()):
-            feed_dict = {}
-            node_1_all_time = []
-            node_2_all_time = []
-
-            # Gather positive context pairs for each node over the specified time range
-            for t in range(self.min_t, self.time_steps):
-                node_1 = []
-                node_2 = []
-                if len(self.context_pairs[t][node]) > self.max_positive:
-                    # Limit the number of positive samples to max_positive
-                    node_1.extend([node]* self.max_positive)
-                    node_2.extend(np.random.choice(self.context_pairs[t][node], self.max_positive, replace=False))
-                else:
-                    node_1.extend([node]* len(self.context_pairs[t][node]))
-                    node_2.extend(self.context_pairs[t][node])
-
-                # Ensure the node lists have the same length
-                assert len(node_1) == len(node_2)
-                node_1_all_time.append(node_1)
-                node_2_all_time.append(node_2)
-
-            # Convert lists to PyTorch tensors
-            # node_1_list = [torch.LongTensor(node) for node in node_1_all_time]
-            # node_2_list = [torch.LongTensor(node) for node in node_2_all_time]
-            node_1_list = [torch.tensor(node, dtype=torch.long) for node in node_1_all_time]
-            node_2_list = [torch.tensor(node, dtype=torch.long) for node in node_2_all_time]
-
-            node_2_negative = []
-            # Generate negative samples for each time step
-            for t in range(len(node_2_list)):
-                degree = self.degs[t]
-                node_positive = node_2_list[t][:, None]
-                node_negative = fixed_unigram_candidate_sampler(true_clasees=node_positive,
-                                                                num_true=1,
-                                                                num_sampled=self.args.neg_sample_size,
-                                                                unique=False,
-                                                                distortion=0.75,
-                                                                unigrams=degree)
-                node_2_negative.append(node_negative)
-            # node_2_neg_list = [torch.LongTensor(node) for node in node_2_negative]
-            node_2_neg_list = [torch.tensor(node, dtype=torch.long) for node in node_2_negative]
-            feed_dict['node_1']=node_1_list
-            feed_dict['node_2']=node_2_list
-            feed_dict['node_2_neg']=node_2_neg_list
-
-            self.data_items[node] = feed_dict
-
-    def num_training_batches(self):
-        """
-        Compute the number of training batches (using batch size)
-        """
-        return len(self.train_nodes) // self.batch_size + 1
-
-
-    def shuffle(self):
-        """
-        Re-shuffle the training set.
-        Also reset the batch number.
-        """
-        self.train_nodes = np.random.permutation(self.train_nodes)
-        self.batch_num = 0
-
-    def test_reset(self):
-        """ Reset batch number"""
-        self.train_nodes =  list(self.graphs[self.time_steps-1].nodes())
-        self.batch_num = 0
-
-
-    @staticmethod
-    def collate_fn(samples):
-        """
-        Collate function to merge a list of samples into a batch for loading.
-        """
-        batch_dict = {}
-        for key in ["node_1", "node_2", "node_2_neg"]:
-            data_list = []
-            for sample in samples:
-                data_list.append(sample[key])
-            concate = []
-            for t in range(len(data_list[0])):
-                concate.append(torch.cat([data[t] for data in data_list]))
-            batch_dict[key] = concate
-        return batch_dict
-
-
-
-class MyDatasetRole(Dataset):
-    def __init__(self, args, graphs, features, adjs,  context_pairs, train_role_graph):
-        """
-        Initialize the dataset with graphs, features, adjacency matrices, and context pairs.
-        """
-        super(MyDatasetRole, self).__init__()
-        self.args = args
-        self.graphs = graphs
-        self.features = [self._preprocess_features(feat) for feat in features]
-        self.adjs = [self._normalize_graph_gcn(a)  for a  in adjs]
-        self.time_steps = args.time_steps
-        self.context_pairs = context_pairs
-        self.max_positive = args.neg_sample_size
-        self.train_nodes = list(self.graphs[self.time_steps-1].nodes()) # all nodes in the graph.
-        self.min_t = max(self.time_steps - self.args.window - 1, 0) if args.window > 0 else 0
-        self.degs = self.construct_degs()
-        self.pyg_graphs = self._build_pyg_graphs()
-        self.train_role_graph = train_role_graph #### updated
-        self.__createitems__()
-
-    def _normalize_graph_gcn(self, adj):
-        """
-        Normalize the adjacency matrix using the GCN formula.
-        """
-        adj = sp.coo_matrix(adj, dtype=np.float32)
-        adj_ = adj + sp.eye(adj.shape[0], dtype=np.float32)
-        rowsum = np.array(adj_.sum(1), dtype=np.float32)
-        degree_mat_inv_sqrt = sp.diags(np.power(rowsum, -0.5).flatten(), dtype=np.float32)
-        adj_normalized = adj_.dot(degree_mat_inv_sqrt).transpose().dot(degree_mat_inv_sqrt).tocoo()
-        return adj_normalized
-
-    def _preprocess_features(self, features):
-        """
-        Row-normalize feature matrix and convert to tuple representation
-        """
-        features = np.array(features)
-        rowsum = np.array(features.sum(1))
-        r_inv = np.power(rowsum, -1).flatten()
-        r_inv[np.isinf(r_inv)] = 0.
-        r_mat_inv = sp.diags(r_inv)
-        features = r_mat_inv.dot(features)
-        return features
-
-    def construct_degs(self):
-        """
-        Compute node degrees in each graph snapshot
-        """
-        degs = []
-        for i in range(self.min_t, self.time_steps):
-            G = self.graphs[i]
-            deg = []
-            for nodeid in G.nodes():
-                deg.append(G.degree(nodeid))
-            degs.append(deg)
-        return degs
-
-    def _build_pyg_graphs(self):
-        """
-        Construct PyTorch Geometric graph data objects from the adjacency matrices and features.
-        This method converts each graph in the dataset to the PyTorch Geometric format, which is
-        used for graph neural network models in PyTorch.
-        """
-        pyg_graphs = []
-        for feat, adj in zip(self.features, self.adjs):
-            x = torch.Tensor(feat)
-            edge_index, edge_weight = tg.utils.from_scipy_sparse_matrix(adj)
-            data = Data(x=x, edge_index=edge_index, edge_weight=edge_weight)
-            pyg_graphs.append(data)
-        return pyg_graphs
-
-    def __len__(self):
-        """
-        Return the total number of nodes in the last snapshot.
-        """
-        return len(self.train_nodes)
-    
-    def end(self):
-        return self.batch_num * self.batch_size >= len(self.train_nodes)
-
-    def __getitem__(self, index):
-        """
-        Fetch the pre-computed data items for the node at the specified index.
-        """
-        node = self.train_nodes[index]
-        return self.data_items[node]
-    
-    def __createitems__(self):
-        """
-        Prepares the dataset items for training by constructing positive and negative context pairs
-        for each node over different time steps. It handles temporal relationships and negative sampling.
-        """
-        self.data_items = {}
-
-        # Iterate over all nodes in the last snapshot of the graph series
-        for node in list(self.graphs[self.time_steps-1].nodes()):
-            feed_dict = {}
-            node_1_all_time = []
-            node_2_all_time = []
-
-            # Gather positive context pairs for each node over the specified time range
-            for t in range(self.min_t, self.time_steps):
-                node_1 = []
-                node_2 = []
-                current_context_pairs = self.context_pairs[t].get(node, []) # Use .get for safety, default to empty list #### updated
-                if len(current_context_pairs) > self.max_positive:
-                    # Limit the number of positive samples to max_positive
-                    node_1.extend([node]* self.max_positive)
-                    node_2.extend(np.random.choice(current_context_pairs, self.max_positive, replace=False).tolist()) #### updated - Ensure list output
-                else:
-                    node_1.extend([node]* len(current_context_pairs))
-                    node_2.extend(current_context_pairs)
-
-                # Ensure the node lists have the same length
-                assert len(node_1) == len(node_2) or len(node_1) == 0, f"Mismatch len(node_1)={len(node_1)} != len(node_2)={len(node_2)} for node {node} at time {t}" #### updated
-                node_1_all_time.append(node_1)
-                node_2_all_time.append(node_2)
-
-            # Convert lists to PyTorch tensors
-            # node_1_list = [torch.LongTensor(node) for node in node_1_all_time]
-            # node_2_list = [torch.LongTensor(node) for node in node_2_all_time]
-            # node_1_list = [torch.tensor(node, dtype=torch.long) for node in node_1_all_time]
-            # node_2_list = [torch.tensor(node, dtype=torch.long) for node in node_2_all_time]
-
-            node_2_negative = []
-            for t_idx_in_window, t in enumerate(range(self.min_t, self.time_steps)): #### updated from now onwards
-                positive_nodes_t_list = node_2_all_time[t_idx_in_window]
-
-                # If there are no positive nodes for this anchor at this time step, no negatives are needed for L_c
-                if not positive_nodes_t_list: 
-                     node_2_negative.append([]) 
-                     continue 
-
-                # Get the unigrams (degrees) for the current time step (relative index in self.degs)
-                degree_t = self.degs[t_idx_in_window] 
-
-                # Get the structural role mapping for the current absolute time step 't'
-                # self.train_role_graph is a list [roles_t0, roles_t1, ...]
-                # roles_tt is a dict {role_id: [node_idx, ...]}
-                role_mapping_t = self.train_role_graph[t] if self.train_role_graph is not None else {} 
-
-                # Sample negatives using the updated sampler function
-                # The sampler returns a flat list of negatives for all positive pairs of this anchor at time t
-                neg_samples_flat = fixed_unigram_candidate_role_aware_sampler( 
-                    anchor_node=node, 
-                    positive_nodes_list=positive_nodes_t_list, 
-                    num_sampled_per_pos=self.args.neg_sample_size,
-                    unique=False, # Original code used False 
-                    distortion=0.75, # Original code used 0.75, but sampler doesn't apply it directly 
-                    unigrams=degree_t, # Degrees for weighted sampling
-                    role_mapping_t=role_mapping_t # Role information for exclusion
+            norm_edge_index, norm_edge_weight = self._normalize_graph_gcn(
+                edge_index_unnormalized,
+                num_nodes,
+                edge_weights=edge_weights_unnormalized,
+                dtype=torch.float32,
+                device=self.device
+            )
+            self.normalized_graphs_pyg.append(
+                Data(
+                    x=self.features[i], 
+                    edge_index=norm_edge_index, 
+                    edge_attr=norm_edge_weight
                 )
-                node_2_negative.append(neg_samples_flat)
+            )
 
-            # Convert lists of lists (node_1_all_time, node_2_all_time, node_2_negative)
-            # into lists of tensors (one tensor per time step in the window)
-            # Fix 2 applied here and below to potentially improve performance
-            node_1_list_tensors = [torch.tensor(nodes, dtype=torch.long) for nodes in node_1_all_time] 
-            node_2_list_tensors = [torch.tensor(nodes, dtype=torch.long) for nodes in node_2_all_time] 
-            node_2_neg_list_tensors = [torch.tensor(nodes, dtype=torch.long) for nodes in node_2_negative] 
 
-            # Store the processed data (list of tensors) for this anchor node
-            feed_dict['node_1']=node_1_list_tensors
-            feed_dict['node_2']=node_2_list_tensors 
-            feed_dict['node_2_neg']=node_2_neg_list_tensors 
+        self.time_steps = args.time_steps
+        self.context_pairs = context_pairs
+        self.max_positive = getattr(args, 'max_positive', args.neg_sample_size) 
+        
+        if self.graphs_repr:
+             self.train_nodes = list(range(self.graphs_repr[self.time_steps-1]['num_nodes']))
+        else:
+             self.train_nodes = []
 
-            self.data_items[node] = feed_dict
+        self.min_t = max(self.time_steps - self.args.window - 1, 0) if args.window > 0 else 0
+        
+        self.degs = self.construct_degs() 
+        # self.pyg_graphs = self._build_pyg_graphs() # This is now self.normalized_graphs_pyg
+        
+        self.__createitems__()
 
-    def num_training_batches(self):
+    def _normalize_graph_gcn(self, edge_index, num_nodes, edge_weights=None, dtype=torch.float32, device='cpu'):
+        # Add self-loops. If no weights, add_self_loops creates weights of 1.
+        # If weights exist, it can fill with a value (e.g., 1) for self-loops.
+        filled_value = 1.0
+        edge_index_sl, edge_weights_sl = tg_utils.add_self_loops(
+            edge_index, edge_weights, fill_value=filled_value, num_nodes=num_nodes
+        )
+        
+        row, col = edge_index_sl[0], edge_index_sl[1]
+        deg = tg_utils.degree(col, num_nodes=num_nodes, dtype=dtype)
+        deg_inv_sqrt = deg.pow(-0.5)
+        deg_inv_sqrt[deg_inv_sqrt == float('inf')] = 0 # Handle isolated nodes
+
+        normalized_edge_weights = deg_inv_sqrt[row] * edge_weights_sl * deg_inv_sqrt[col]
+        
+        return edge_index_sl.to(device), normalized_edge_weights.to(device)
+
+    def _preprocess_features(self, features_np):
+        features = torch.from_numpy(np.array(features_np)).float().to(self.device)
+        
+        # Row-normalize feature matrix
+        row_sum = features.sum(dim=1, keepdim=True)
+        r_inv = torch.pow(row_sum, -1)
+        r_inv[torch.isinf(r_inv)] = 0.
+        features = features * r_inv 
+        return features
+
+    def construct_degs(self):
+        # Compute node degrees in each graph snapshot for negative sampling
+        degs_all_timesteps = []
+        for t in range(self.min_t, self.time_steps):
+            edge_idx_t = self.graphs_repr[t]['edge_index'].to(self.device) # ensure on correct device
+            num_nodes_t = self.graphs_repr[t]['num_nodes']
+
+            current_degs = tg_utils.degree(edge_idx_t[1], num_nodes=num_nodes_t, dtype=torch.float)
+            
+            # The sampler expects a list or np.array of degrees.
+            degs_all_timesteps.append(current_degs.cpu().tolist())
+        return degs_all_timesteps
+
+    def __len__(self):
+        return len(self.train_nodes)
+
+    # def end(self): 
+    #     return self.batch_num * self.batch_size >= len(self.train_nodes)
+
+    def __getitem__(self, index):
+        # train_nodes are indices 0 to N-1. 'index' is one such node_id.
+        node_id = self.train_nodes[index] 
+        return self.data_items[node_id] # data_items are pre-computed per node
+
+    def __createitems__(self):
         """
-        Compute the number of training batches (using batch size)
+        Prepares the dataset items for training by constructing positive and negative context pairs
+        for each node over different time steps. It handles temporal relationships and negative sampling.
         """
-        return len(self.train_nodes) // self.batch_size + 1
+        self.data_items = {}
+        
+        # Iterate over all nodes relevant for training (from the last snapshot)
+        for node_id in self.train_nodes: # node_id is an integer from 0 to num_nodes-1
+            feed_dict_for_node = {}
+            node_1_all_time = [] # Source node (current node_id)
+            node_2_all_time = [] # Positive context C_p(node_id)
+
+            for t in range(self.min_t, self.time_steps):
+                # context_pairs[t] is a defaultdict for snapshot t
+                # context_pairs[t][node_id] is a list of context nodes for node_id at time t
+                
+                node_1_current_t = []
+                node_2_current_t = []
+                
+                # Check if node_id is a key in context_pairs for this timestep
+                if node_id not in self.context_pairs[t] or not self.context_pairs[t][node_id]:
+                    node_1_all_time.append(torch.LongTensor([]).to(self.device))
+                    node_2_all_time.append(torch.LongTensor([]).to(self.device))
+                    continue # Move to next timestep
+
+                # Actual positive context nodes for (node_id, t)
+                positive_samples_for_node_t = self.context_pairs[t][node_id]
+
+                if len(positive_samples_for_node_t) > self.max_positive:
+                    node_1_current_t.extend([node_id] * self.max_positive)
+                    chosen_pos_samples = np.random.choice(
+                        positive_samples_for_node_t, self.max_positive, replace=False
+                    )
+                    node_2_current_t.extend(chosen_pos_samples)
+                else:
+                    node_1_current_t.extend([node_id] * len(positive_samples_for_node_t))
+                    node_2_current_t.extend(positive_samples_for_node_t)
+                
+                node_1_all_time.append(torch.LongTensor(node_1_current_t).to(self.device))
+                node_2_all_time.append(torch.LongTensor(node_2_current_t).to(self.device))
+
+            # feed_dict_for_node['node_1'] = node_1_all_time # List of Tensors
+            # feed_dict_for_node['node_2'] = node_2_all_time # List of Tensors
+
+            # Generate negative samples for each time step
+            node_2_neg_all_time = []
+            for t_idx in range(len(node_2_all_time)): 
+                if node_2_all_time[t_idx].numel() == 0: 
+                    node_2_neg_all_time.append(torch.LongTensor([]).to(self.device))
+                    continue
+
+                # true_classes for sampler: (num_positive_samples_at_t, 1)
+                # node_2_all_time[t_idx] is (num_positive_samples_at_t,)
+                node_positive_for_sampler = node_2_all_time[t_idx].unsqueeze(1) 
+
+                degree_dist_for_t = self.degs[t_idx]
+                
+                # Check if degree_dist_for_t is empty (e.g. graph had no nodes/edges)
+                if not degree_dist_for_t:
+                    # print(f"Warning: Degree distribution empty for timestep index {t_idx} for node {node_id}. Skipping negative sampling.")
+                    node_2_neg_all_time.append(torch.LongTensor([]).to(self.device)) # No negatives if no degree dist
+                    continue
 
 
-    def shuffle(self):
-        """
-        Re-shuffle the training set.
-        Also reset the batch number.
-        """
-        self.train_nodes = np.random.permutation(self.train_nodes)
-        self.batch_num = 0
+                node_negative_np = fixed_unigram_candidate_sampler(
+                    true_classes=node_positive_for_sampler.cpu(), # Sampler expects CPU tensor or np array
+                    num_true=1,
+                    num_sampled=self.args.neg_sample_size,
+                    unique=False, 
+                    distortion=0.75, # Standard value
+                    unigrams=degree_dist_for_t
+                ) 
+                
+                if node_negative_np and isinstance(node_negative_np, list) and \
+                   all(isinstance(arr, np.ndarray) for arr in node_negative_np):
+                    if all(arr.ndim > 0 for arr in node_negative_np if arr.size >0): # ensure not list of empty arrays
+                         node_negative_tensor = torch.from_numpy(np.stack(node_negative_np)).long().to(self.device)
+                    else: 
+                        num_pos_samples = node_positive_for_sampler.shape[0]
+                        node_negative_tensor = torch.LongTensor(num_pos_samples, self.args.neg_sample_size).fill_(0).to(self.device) 
+                        # print(f"Warning: Could not stack negative samples for node {node_id}, t_idx {t_idx}. Using zeros.")
 
-    def test_reset(self):
-        """ Reset batch number"""
-        self.train_nodes =  list(self.graphs[self.time_steps-1].nodes())
-        self.batch_num = 0
+                else: 
+                    num_pos_samples = node_positive_for_sampler.shape[0]
+                    node_negative_tensor = torch.LongTensor(num_pos_samples, self.args.neg_sample_size).fill_(0).to(self.device) # Placeholder
+                    # print(f"Warning: Negative sampler returned unexpected format for node {node_id}, t_idx {t_idx}. Using zeros.")
 
+                node_2_neg_all_time.append(node_negative_tensor)
+            
+            feed_dict_for_node['node_1'] = node_1_all_time
+            feed_dict_for_node['node_2'] = node_2_all_time
+            feed_dict_for_node['node_2_neg'] = node_2_neg_all_time
+            self.data_items[node_id] = feed_dict_for_node
 
     @staticmethod
     def collate_fn(samples):
-        """
-        Collate function to merge a list of samples into a batch for loading.
-        """
+        # Samples is a list of feed_dict_for_node from __getitem__
         batch_dict = {}
+        if not samples: return batch_dict 
+
+        # Keys are 'node_1', 'node_2', 'node_2_neg'
         for key in ["node_1", "node_2", "node_2_neg"]:
-            data_list = []
-            for sample in samples:
-                data_list.append(sample[key])
-            concate = []
-            for t in range(len(data_list[0])):
-                concate.append(torch.cat([data[t] for data in data_list]))
-            batch_dict[key] = concate
+            data_list_for_key = [sample[key] for sample in samples if key in sample]
+            
+            if not data_list_for_key : continue 
+
+            concatenated_timesteps = []
+            num_timesteps_in_batch = len(data_list_for_key[0]) 
+
+            for t in range(num_timesteps_in_batch):
+                # Collect all tensors for current timestep 't' from all samples in the batch
+                tensors_for_current_t = [sample_data_for_key[t] for sample_data_for_key in data_list_for_key if t < len(sample_data_for_key)]
+                
+                non_empty_tensors_for_t = [tensor for tensor in tensors_for_current_t if tensor.numel() > 0]
+
+                if non_empty_tensors_for_t:
+                    concatenated_timesteps.append(torch.cat(non_empty_tensors_for_t))
+                else:
+                    device = samples[0][key][0].device if samples and samples[0][key] and samples[0][key][0].numel() > 0 else \
+                             (torch.device("cuda" if torch.cuda.is_available() else "cpu"))
+
+                    if key == "node_2_neg":
+                        concatenated_timesteps.append(torch.LongTensor([]).to(device)) # Simplistic empty
+                    else:
+                        concatenated_timesteps.append(torch.LongTensor([]).to(device))
+            
+            batch_dict[key] = concatenated_timesteps
         return batch_dict
-
-
-    

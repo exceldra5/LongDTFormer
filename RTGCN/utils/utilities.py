@@ -1,208 +1,211 @@
-import random
-
 import numpy as np
 import copy
-import networkx as nx
+# import networkx as nx
 from collections import defaultdict
-from utils.random_walk import Graph_RandomWalk, alias_setup, alias_draw
-
+from utils.random_walk import Graph_RandomWalk 
 import torch
 
-
-
-"""Random walk-based pair generation."""
-
-def run_random_walks_n2v(graph, adj, num_walks, walk_len):
+def run_random_walks_n2v(graph_repr, adj_matrix_np, num_walks, walk_len, p=1.0, q=1.0):
     """
-    Perform random walks on the graph using node2vec's sampling strategy.
-
-    Args:
-        graph (networkx.Graph): The graph on which random walks are to be performed.
-        adj (np.array): The adjacency matrix of the graph.
-        num_walks (int): The number of walks to perform for each node.
-        walk_len (int): The length of each random walk.
-
-    Returns:
-        dict: A dictionary where keys are start nodes and values are lists of context nodes found in random walks.
+    graph_repr: dict, {'edge_index': torch.Tensor, 'num_nodes': int}
+    adj_matrix_np: np.array, the raw adjacency matrix for the current graph snapshot.
+                   Used to extract edge weights if the graph is weighted.
+    num_walks: int
+    walk_len: int
+    p, q: float, Node2Vec parameters (default to 1.0 for simple weighted random walks)
     """
-    # Initialize a NetworkX graph from the given data
-    nx_G = nx.Graph()
-    for e in graph.edges():
-        nx_G.add_edge(e[0], e[1])
-    for edge in graph.edges():
-        nx_G[edge[0]][edge[1]]['weight'] = adj[edge[0], edge[1]]
+    edge_index = graph_repr['edge_index'] # This is a PyTorch tensor
+    num_nodes = graph_repr['num_nodes']
 
-    # Set up the graph for node2vec processing
-    G = Graph_RandomWalk(nx_G, False, 1.0, 1.0)
-    G.preprocess_transition_probs()
+    # Extract edge weights from adj_matrix_np for the given edge_index
+    # edge_index is (2, num_edges). Rows are sources, cols are targets.
+    # adj_matrix_np is (num_nodes, num_nodes)
+    
+    if edge_index.shape[1] == 0:
+        print(f"# nodes with random walk samples: 0 (graph has no edges at this timestep)")
+        print(f"# sampled pairs: 0")
+        return defaultdict(list)
 
-    # Generate walks and collect context pairs within a defined window size
+    # Convert edge_index to numpy if it's a tensor, for indexing adj_matrix_np
+    if isinstance(edge_index, torch.Tensor):
+        edge_index_np_for_weights = edge_index.cpu().numpy()
+    else: 
+        edge_index_np_for_weights = edge_index
+
+    try:
+        edge_weights = adj_matrix_np[edge_index_np_for_weights[0, :], edge_index_np_for_weights[1, :]]
+        edge_weights = np.array(edge_weights).flatten()
+    except IndexError as e:
+        print(f"IndexError during weight extraction: {e}. Max index in edge_index: {edge_index_np_for_weights.max()}, adj_matrix_np shape: {adj_matrix_np.shape}")
+        # Fallback to unweighted if indexing fails (e.g. num_nodes mismatch)
+        edge_weights = np.ones(edge_index.shape[1], dtype=np.float32)
+
+
+    G = Graph_RandomWalk(edge_index=edge_index, 
+                         num_nodes=num_nodes,
+                         is_directed=False, 
+                         p=p,
+                         q=q,
+                         edge_weights=edge_weights) 
+
+    G.preprocess_transition_probs() # NOTE(wsgwak): check its role in the code
+
     walks = G.simulate_walks(num_walks, walk_len)
+    
     WINDOW_SIZE = 10
     pairs = defaultdict(list)
     pairs_cnt = 0
     for walk in walks:
         for word_index, word in enumerate(walk):
-            for nb_word in walk[max(word_index - WINDOW_SIZE, 0): min(word_index + WINDOW_SIZE, len(walk)) + 1]:
-                if nb_word != word:
-                    pairs[word].append(nb_word)
-                    pairs_cnt += 1
-    print("# nodes with random walk samples: {}".format(len(pairs)))
-    print("# sampled pairs: {}".format(pairs_cnt))
+            start = max(word_index - WINDOW_SIZE, 0)
+            end = min(word_index + WINDOW_SIZE + 1, len(walk))
+            for i in range(start, end):
+                if i == word_index:
+                    continue
+                nb_word = walk[i]
+                pairs[word].append(nb_word)
+                pairs_cnt += 1
+                
+    print(f"# nodes with random walk samples: {len(pairs)}")
+    print(f"# sampled pairs: {pairs_cnt}")
     return pairs
 
-# Helper function to get roles for a node from the role mapping dictionary
-def get_node_roles_from_mapping(node_idx, role_mapping_t): 
-    """Helper to find roles for a node from the role dictionary.""" 
-    roles = set() 
-    if isinstance(role_mapping_t, dict): 
-        for role_id, node_list in role_mapping_t.items(): 
-            if node_idx in node_list: 
-                roles.add(role_id) 
-    return roles 
 
-def fixed_unigram_candidate_role_aware_sampler(anchor_node, positive_nodes_list, num_sampled_per_pos, unique, distortion, unigrams, role_mapping_t): 
+def fixed_unigram_candidate_sampler(true_classes, num_true, num_sampled, unique, distortion, unigrams):
     """
-    Samples negative examples for the connective proximity loss. Samples `num_sampled_per_pos`
-    negatives for *each* positive node associated with the anchor node (u),
-    excluding the positive node itself and any node that shares a structural role
-    with the anchor node (u) at the current time step t. Returns a flat list. #### updated
-
-    Args:
-        anchor_node (int): The index of the anchor node (u). #### updated
-        positive_nodes_list (list): List of positive node indices (v) for the anchor at time t. #### updated
-        num_sampled_per_pos (int): Number of negative classes to sample *per positive node*. #### updated
-        unique (bool): If true, sample without replacement (per batch of negatives for a positive node). #### updated
-        distortion (float): The distortion to apply to the unigram probabilities (not applied currently). #### updated
-        unigrams (np.array): Unigram probability distribution (e.g., node degrees).
-        role_mapping_t (dict): Dictionary mapping role IDs to lists of node indices for time t. #### updated
-
-    Returns:
-        list: Flat list of (len(positive_nodes_list) * num_sampled_per_pos) sampled negative node indices.
+    true_classes: torch.Tensor or np.array, shape (batch_size, num_true)
+    unigrams: list, np.array, or torch.Tensor of node degrees or unigram probabilities.
     """
-    num_nodes = len(unigrams) #### updated
-    all_sampled_negatives = [] #### updated
+    if isinstance(true_classes, torch.Tensor):
+        true_classes_np = true_classes.cpu().numpy()
+    else:
+        true_classes_np = np.array(true_classes)
 
-    # Identify roles of the anchor node (u)
-    anchor_roles = get_node_roles_from_mapping(anchor_node, role_mapping_t) #### updated
+    if not isinstance(unigrams, list): 
+        if isinstance(unigrams, torch.Tensor):
+            unigrams_list = unigrams.cpu().tolist()
+        else: 
+            unigrams_list = unigrams.tolist()
+    else: 
+        unigrams_list = list(unigrams) 
 
-    # Identify all nodes with the same role(s) as the anchor (u)
-    same_role_nodes = set() #### updated
-    if anchor_roles: #### updated
-        for role_id in anchor_roles: #### updated
-             if role_id in role_mapping_t: #### updated
-                 same_role_nodes.update(role_mapping_t[role_id]) #### updated
-
-    # Nodes to exclude from the sampling pool for *any* positive node associated with this anchor
-    # Exclude the anchor node (u) itself and all nodes (including u) with the same role(s) as u.
-    base_excluded_nodes = same_role_nodes.copy() #### updated
-    base_excluded_nodes.add(anchor_node) #### updated
-
-    # Create a mask for potentially valid candidates (excluding same-role nodes and anchor)
-    initial_mask = np.ones(num_nodes, dtype=bool) #### updated
-    # Ensure excluded nodes are valid indices before masking
-    valid_base_excluded = [n for n in base_excluded_nodes if 0 <= n < num_nodes] #### updated
-    initial_mask[valid_base_excluded] = False #### updated
-
-    initial_candidate_pool = np.array(range(num_nodes))[initial_mask] #### updated
-    initial_probs_raw = np.array(unigrams)[initial_mask] #### updated
-
-    # Now, for each positive node v associated with the anchor u, sample negatives v'
-    for positive_node_v in positive_nodes_list: #### updated
-        # Create a mask specific to this positive node 'v'
-        current_mask = initial_mask.copy() #### updated
-        # Also exclude the positive node 'v' itself if it's a valid index
-        if 0 <= positive_node_v < num_nodes: #### updated
-             current_mask[positive_node_v] = False #### updated
-
-        current_candidate_pool = np.array(range(num_nodes))[current_mask] #### updated
-        current_probs_raw = np.array(unigrams)[current_mask] #### updated
-
-        sum_current_probs = np.sum(current_probs_raw) #### updated
-
-        sampled_negatives_for_pair = [] #### updated
-
-        if len(current_candidate_pool) == 0: #### updated
-             # No candidates available after exclusions
-             if num_sampled_per_pos > 0: #### updated
-                  # Append placeholders if needed to maintain structure/size expectations
-                  # Returning anchor node itself as a dummy negative to prevent size mismatch.
-                  sampled_negatives_for_pair = [anchor_node] * num_sampled_per_pos #### updated
-        elif len(current_candidate_pool) < num_sampled_per_pos and unique: #### updated
-              # Cannot sample enough unique negatives
-              sampled_negatives_for_pair = current_candidate_pool.tolist() #### updated
-              # Need to pad if not enough unique available and not unique is allowed
-              if not unique and len(sampled_negatives_for_pair) < num_sampled_per_pos: #### updated
-                  padding_needed = num_sampled_per_pos - len(sampled_negatives_for_pair) #### updated
-                  # If sampling with replacement, use the current candidate pool and its probabilities
-                  probs_to_sample_from = current_probs_raw / sum_current_probs if sum_current_probs > 0 else None #### updated
-                  padding_samples = np.random.choice(current_candidate_pool, size=padding_needed, replace=True, p=probs_to_sample_from).tolist() #### updated
-                  sampled_negatives_for_pair.extend(padding_samples) #### updated
-
-        else:
-            # Sample from the current filtered pool
-            probs_to_sample_from = current_probs_raw / sum_current_probs if sum_current_probs > 0 else None #### updated
-            sampled_indices_in_current = np.random.choice(len(current_candidate_pool), size=num_sampled_per_pos, replace=unique, p=probs_to_sample_from) #### updated
-            sampled_negatives_for_pair = current_candidate_pool[sampled_indices_in_current].tolist() #### updated
-
-        all_sampled_negatives.extend(sampled_negatives_for_pair) #### updated
-
-    return all_sampled_negatives #### updated
-
-def fixed_unigram_candidate_sampler(true_clasees, num_true, num_sampled, unique,  distortion, unigrams):
-    """
-    Samples negative examples using a unigram distribution with optional distortion.
-
-    Args:
-        true_classes (np.array): Array of true class indices.
-        num_true (int): Number of true classes per example.
-        num_sampled (int): Number of negative classes to sample.
-        unique (bool): If true, sample without replacement.
-        distortion (float): The distortion to apply to the unigram probabilities.
-        unigrams (np.array): Unigram probability distribution.
-
-    Returns:
-        list: List of sampled negative examples for each input example.
-    """
-    assert true_clasees.shape[1] == num_true
+    assert true_classes_np.shape[1] == num_true, \
+        f"true_classes.shape[1] {true_classes_np.shape[1]} != num_true {num_true}"
+    
     samples = []
-    for i in range(true_clasees.shape[0]):
-        dist = copy.deepcopy(unigrams)
-        candidate = list(range(len(dist)))
-        taboo = true_clasees[i].cpu().tolist()
-        for tabo in sorted(taboo, reverse=True):
-            candidate.remove(tabo)
-            dist.pop(tabo)
-        sample = np.random.choice(candidate, size=num_sampled, replace=unique, p=dist/np.sum(dist))
-        samples.append(sample)
+    if not unigrams_list: # Handle empty unigrams (e.g., graph with no nodes/edges)
+        # print("Warning: Unigrams list is empty in fixed_unigram_candidate_sampler.")
+        for _ in range(true_classes_np.shape[0]):
+            samples.append(np.array([], dtype=int)) 
+        return samples
+
+
+    effective_distortion = distortion if distortion != 1.0 else None 
+    
+    try:
+        unigrams_np = np.array(unigrams_list, dtype=float)
+    except ValueError:
+        # This can happen if unigrams_list contains non-numeric data (e.g. nested lists from bad degs)
+        if unigrams_list:
+            unigrams_np = np.ones(len(unigrams_list), dtype=float) / len(unigrams_list)
+        else: 
+             for _ in range(true_classes_np.shape[0]):
+                samples.append(np.array([], dtype=int))
+             return samples
+
+
+    if effective_distortion:
+        unigrams_distorted_np = np.power(unigrams_np, effective_distortion)
+    else:
+        unigrams_distorted_np = unigrams_np 
+
+    if unigrams_distorted_np.size == 0: 
+        sum_unigrams_distorted = 0
+    else:
+        sum_unigrams_distorted = np.sum(unigrams_distorted_np)
+
+    if sum_unigrams_distorted == 0 and unigrams_distorted_np.size > 0 :
+        probs_full = np.ones_like(unigrams_distorted_np) / max(1, len(unigrams_distorted_np)) # Avoid div by zero
+    elif sum_unigrams_distorted == 0 and unigrams_distorted_np.size == 0:
+        probs_full = np.array([]) 
+    else:
+        probs_full = unigrams_distorted_np / sum_unigrams_distorted
+        
+    full_candidate_list = list(range(len(unigrams_list)))
+
+    for i in range(true_classes_np.shape[0]):
+        taboo = true_classes_np[i, :].tolist()
+        current_candidates = []
+        current_probs = []
+        
+        if not full_candidate_list or probs_full.size == 0:
+            samples.append(np.array([], dtype=int))
+            continue
+
+        for idx, prob_val in zip(full_candidate_list, probs_full):
+            if idx not in taboo:
+                current_candidates.append(idx)
+                current_probs.append(prob_val)
+        
+        if not current_candidates: 
+            samples.append(np.array([], dtype=int)) 
+            continue
+            
+        current_probs_np = np.array(current_probs, dtype=float)
+        sum_current_probs = np.sum(current_probs_np)
+
+        if sum_current_probs == 0:
+            if current_candidates:
+                # print(f"Warning: Sum of current_probs is zero for sample {i}. Using uniform over remaining candidates.")
+                final_probs = np.ones_like(current_probs_np) / len(current_probs_np)
+            else:
+                samples.append(np.array([], dtype=int))
+                continue
+        else:
+            final_probs = current_probs_np / sum_current_probs
+        
+        actual_num_sampled = min(num_sampled, len(current_candidates))
+        
+        if actual_num_sampled == 0:
+             samples.append(np.array([], dtype=int))
+             continue
+
+        try:
+            sampled_indices = np.random.choice(
+                current_candidates, 
+                size=actual_num_sampled, 
+                replace=not unique,
+                p=final_probs
+            )
+            samples.append(sampled_indices)
+        except ValueError as e:
+            # This can happen if probabilities sum to non-1, or other issues with p
+            try:
+                sampled_indices = np.random.choice(
+                    current_candidates,
+                    size=actual_num_sampled,
+                    replace=not unique
+                )
+                samples.append(sampled_indices)
+            except Exception as fallback_e:
+                # print(f"Fallback sampling also failed: {fallback_e}")
+                samples.append(np.array([], dtype=int)) # Last resort
+
     return samples
 
+
 def to_device(batch, device):
-    """
-    Transfers each tensor in the given batch to the specified device.
-
-    Args:
-        batch (dict): A dictionary containing lists of tensors.
-        device (torch.device): The device to which the tensors should be moved.
-
-    Returns:
-        dict: A new dictionary with the same structure as 'batch', but with all tensors moved to the specified device.
-    """
-    feed_dict = copy.deepcopy(batch)
-
-    # Extract tensor lists from the dictionary; assumes keys 'node_1', 'node_2', 'node_2_negative'
-    node_1, node_2, node_2_negative = feed_dict.values()
-
-    # Move each tensor list to the specified device
-    feed_dict["node_1"] = [x.to(device) for x in node_1]
-    feed_dict["node_2"] = [x.to(device) for x in node_2]
-    feed_dict["node_2_neg"] = [x.to(device) for x in node_2_negative]
-
-    # Return the updated dictionary with all tensors on the new device
-    return feed_dict
-
-
+    feed_dict = copy.deepcopy(batch) # Deepcopy to avoid modifying original batch structure outside
+    
+    if "node_1" in feed_dict and isinstance(feed_dict["node_1"], list):
+        feed_dict["node_1"] = [x.to(device) for x in feed_dict["node_1"]]
+    
+    if "node_2" in feed_dict and isinstance(feed_dict["node_2"], list):
+        feed_dict["node_2"] = [x.to(device) for x in feed_dict["node_2"]]
         
+    key_for_neg = "node_2_neg" if "node_2_neg" in feed_dict else "node_2_negative"
 
-
-
+    if key_for_neg in feed_dict and isinstance(feed_dict[key_for_neg], list):
+        feed_dict[key_for_neg] = [x.to(device) for x in feed_dict[key_for_neg]]
+    
+    return feed_dict

@@ -4,18 +4,13 @@ import os
 import numpy as np
 import torch.nn as nn
 import math
-import scipy.sparse as sparse
+# Removed: import scipy.sparse as sparse (will use torch.sparse)
+import scipy # will be removed 
 import statistics
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import accuracy_score,precision_score,roc_auc_score
+from sklearn.metrics import accuracy_score, roc_auc_score # precision_score removed as unused
 
 def reset_parameters(named_parameters):
-    """
-    Initializes the parameters of a neural network according to their shape.
-
-    Args:
-        named_parameters (iterable): An iterable containing parameter name and parameter tensor pairs.
-    """
     for i in named_parameters():
         if len(i[1].size()) == 1:
             std = 1.0 / math.sqrt(i[1].size(0))
@@ -24,53 +19,47 @@ def reset_parameters(named_parameters):
             nn.init.xavier_normal_(i[1])
 
 def set_random_seed(seed=0):
-    """Set random seed.
-    Parameters
-    ----------
-    seed : int
-        Random seed to use
-    """
     random.seed(seed)
     os.environ['PYTHONHASHSEED'] = str(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed(seed)
-        torch.cuda.manual_seed_all(seed) # check its effect
+    # if torch.cuda.is_available():
+    torch.cuda.manual_seed(seed)
     torch.backends.cudnn.benchmark = False
     torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.enabled = False
+    torch.use_deterministic_algorithms(True) # PyTorch 1.8+ for reproducibility
+    os.environ['CUBLAS_WORKSPACE_CONFIG'] = ':16:8' # NOTE(wsgwak): check
+    
+    torch.backends.cudnn.enabled = False 
 
-
-
-
-
-#refer to https://github.com/iMoonLab/THU-HyperG/blob/master/hyperg/hyperg.py
 class HyperG:
     def __init__(self, H, X=None, w=None):
-        """ Initial the incident matrix, node feature matrix and hyperedge weight vector of hypergraph
-        :param H: scipy coo_matrix of shape (n_nodes, n_edges)
-        :param X: numpy array of shape (n_nodes, n_features)
-        :param w: numpy array of shape (n_edges,)
         """
-        assert sparse.issparse(H)
+        H: PyTorch sparse_coo_tensor of shape (n_nodes, n_edges)
+        X: PyTorch FloatTensor of shape (n_nodes, n_features), optional
+        w: PyTorch FloatTensor of shape (n_edges,), optional
+        """
+        assert H.is_sparse, "H must be a PyTorch sparse tensor"
         assert H.ndim == 2
 
         self._H = H
         self._n_nodes = self._H.shape[0]
         self._n_edges = self._H.shape[1]
+        self._device = H.device
 
         if X is not None:
-            assert isinstance(X, np.ndarray) and X.ndim == 2
-            self._X = X
+            assert isinstance(X, torch.Tensor) and X.ndim == 2
+            assert X.shape[0] == self._n_nodes
+            self._X = X.to(self._device)
         else:
             self._X = None
 
         if w is not None:
-            self.w = w.reshape(-1)
+            assert isinstance(w, torch.Tensor)
+            self.w = w.reshape(-1).to(self._device)
             assert self.w.shape[0] == self._n_edges
         else:
-            self.w = np.ones(self._n_edges)
+            self.w = torch.ones(self._n_edges, device=self._device)
 
         self._DE = None
         self._DV = None
@@ -93,72 +82,119 @@ class HyperG:
 
     def node_features(self):
         return self._X
+    
+    def _get_sparse_diag(self, diag_values, size_tuple):
+        if not diag_values.is_sparse: # Ensure diag_values is dense for torch.diag
+            diag_values = diag_values.to_dense()
+        # Ensure diag_values is 1D for torch.diag
+        if diag_values.ndim > 1:
+            diag_values = diag_values.squeeze()
+        
+        # Check if diag_values is empty
+        if diag_values.numel() == 0:
+            return torch.sparse_coo_tensor(torch.empty((2,0), dtype=torch.long, device=self._device),
+                                           torch.empty((0,), dtype=diag_values.dtype, device=self._device),
+                                           size_tuple, device=self._device)
+
+        # Create indices for diagonal elements
+        indices = torch.arange(diag_values.shape[0], device=self._device).unsqueeze(0).repeat(2, 1)
+        return torch.sparse_coo_tensor(indices, diag_values, size_tuple, device=self._device)
+
 
     def node_degrees(self):
         if self._DV is None:
-            H = self._H.tocsr()
-            dv = H.dot(self.w.reshape(-1, 1)).reshape(-1)
-            self._DV = sparse.diags(dv, shape=(self._n_nodes, self._n_nodes))
+            # H is (N, E), w is (E,). We want (N, N) diagonal matrix.
+            # dv = sum_e H_ie * w_e for each node i
+            
+            # dv = torch.sparse.mm(self._H, self.w.reshape(-1, 1)).squeeze()
+            # self._DV = self._get_sparse_diag(dv, (self._n_nodes, self._n_nodes))
+            H_dense = self._H.to_dense()
+            dv = torch.matmul(H_dense, self.w.reshape(-1, 1)).squeeze()
+            self._DV = self._get_sparse_diag(dv, (self._n_nodes, self._n_nodes)) # This puts it back to sparse diag
+            # If DV itself needs to be dense:
+            # self._DV = torch.diag(dv)
         return self._DV
 
     def edge_degrees(self):
         if self._DE is None:
-            H = self._H.tocsr()
-            de = H.sum(axis=0).A.reshape(-1)
-            self._DE = sparse.diags(de, shape=(self._n_edges, self._n_edges))
+            # de = sum_n H_ne for each edge e
+            # H is (N,E). H.T is (E,N). H.T.sum(dim=1) gives (E,)
+            de = torch.sparse.sum(self._H, dim=0).to_dense() # to_dense for _get_sparse_diag
+            self._DE = self._get_sparse_diag(de, (self._n_edges, self._n_edges))
         return self._DE
 
     def inv_edge_degrees(self):
         if self._INVDE is None:
-            self.edge_degrees()
-            inv_de = np.power(self._DE.data.reshape(-1), -1.)
-            self._INVDE = sparse.diags(inv_de, shape=(self._n_edges, self._n_edges))
+            de = self.edge_degrees().coalesce().values() # Get diagonal values
+            inv_de_val = torch.pow(de, -1.)
+            inv_de_val[torch.isinf(inv_de_val) | torch.isnan(inv_de_val)] = 0 # Handle division by zero
+            self._INVDE = self._get_sparse_diag(inv_de_val, (self._n_edges, self._n_edges))
         return self._INVDE
 
     def inv_square_node_degrees(self):
         if self._DV2 is None:
-            self.node_degrees()
-            dv2 = np.power(self._DV.data.reshape(-1)+1e-6, -0.5)
-            self._DV2 = sparse.diags(dv2, shape=(self._n_nodes, self._n_nodes))
+            dv = self.node_degrees().coalesce().values() # Get diagonal values
+            dv2_val = torch.pow(dv + 1e-6, -0.5) # Add epsilon for stability
+            dv2_val[torch.isinf(dv2_val) | torch.isnan(dv2_val)] = 0
+            self._DV2 = self._get_sparse_diag(dv2_val, (self._n_nodes, self._n_nodes))
         return self._DV2
 
     def theta_matrix(self):
         if self._THETA is None:
-            self.inv_square_node_degrees()
-            self.inv_edge_degrees()
+            DV2 = self.inv_square_node_degrees()
+            INVDE = self.inv_edge_degrees()
+            # W_diag = self._get_sparse_diag(self.w, (self._n_edges, self._n_edges))
+         
+            W_invDE_diag_values = self.w * INVDE.coalesce().values()
+            # W_invDE_diag = self._get_sparse_diag(W_invDE_diag_values, (self._n_edges, self._n_edges))
 
-            W = sparse.diags(self.w)
-            self._THETA = self._DV2.dot(self._H).dot(W).dot(self._INVDE).dot(self._H.T).dot(self._DV2)
+
+            DV2_dense = self.inv_square_node_degrees().to_dense()
+            H_dense = self._H.to_dense()
+
+            # W_invDE_diag_values was calculated earlier
+            W_invDE_diag_dense = torch.diag(W_invDE_diag_values) # Creates a dense diagonal matrix
+
+            # Theta_intermediate = (H_dense @ W_invDE_diag_dense) @ H_dense.T
+            # Or step-by-step:
+            Term_HWide_dense = torch.matmul(H_dense, W_invDE_diag_dense)
+            Theta_intermediate_dense = torch.matmul(Term_HWide_dense, H_dense.T)
+
+            self._THETA = torch.matmul(DV2_dense, torch.matmul(Theta_intermediate_dense, DV2_dense))
 
         return self._THETA
 
     def laplacian(self):
         if self._L is None:
-            self.theta_matrix()
-            self._L = sparse.eye(self._n_nodes) - self._THETA
+            theta = self.theta_matrix() # This might be dense
+            
+            # Create sparse identity
+            eye_indices = torch.arange(self._n_nodes, device=self._device).unsqueeze(0).repeat(2, 1)
+            eye_values = torch.ones(self._n_nodes, device=self._device)
+            I = torch.sparse_coo_tensor(eye_indices, eye_values, (self._n_nodes, self._n_nodes), device=self._device)
+            
+            if theta.is_sparse:
+                self._L = I - theta
+            else: # if theta is dense
+                self._L = I.to_dense() - theta # Result will be dense
         return self._L
 
     def update_hyedge_weights(self, w):
-        assert isinstance(w, (np.ndarray, list)), \
-            "The hyperedge array should be a numpy.ndarray or list"
-
-        self.w = np.array(w).reshape(-1)
-        assert w.shape[0] == self._n_edges
+        assert isinstance(w, torch.Tensor)
+        self.w = w.reshape(-1).to(self._device)
+        assert self.w.shape[0] == self._n_edges
 
         self._DV = None
         self._DV2 = None
         self._THETA = None
-        self._L = None
+        self._L = None # Reset dependent attributes
 
     def update_incident_matrix(self, H):
-        assert sparse.issparse(H)
-        assert H.ndim == 2
+        assert H.is_sparse and H.ndim == 2
         assert H.shape[0] == self._n_nodes
         assert H.shape[1] == self._n_edges
-
-        # TODO: reset hyperedge weights?
-
-        self._H = H
+        
+        self._H = H.to(self._device)
         self._DE = None
         self._DV = None
         self._INVDE = None
@@ -167,180 +203,225 @@ class HyperG:
         self._L = None
 
 
-def gen_attribute_hg(n_nodes,role_dict2,Role_set,X=None):
-    """
-    :param attr_dict: dict, eg. {'attri_1': [node_idx_1, node_idx_1, ...], 'attri_2':[...]} (zero-based indexing)
-    :param n_nodes: int,
-    :param X: numpy array, shape = (n_samples, n_features) (optional)
-    :return: instance of HyperG
-    """
-
+def gen_attribute_hg(n_nodes, role_dict2, Role_set, X=None, device='cpu'):
     if X is not None:
-        assert n_nodes == X.shape[0]
+        assert isinstance(X, (np.ndarray, torch.Tensor))
+        if isinstance(X, np.ndarray):
+            X_pt = torch.from_numpy(X).float().to(device)
+        else:
+            X_pt = X.float().to(device)
+        assert n_nodes == X_pt.shape[0]
+    else:
+        X_pt = None
 
     n_edges = len(Role_set)
-    node_idx = []
-    edge_idx = []
+    node_idx_list = []
+    edge_idx_list = []
 
-    for i, attr in enumerate(role_dict2):
-        nodes = sorted(role_dict2[attr])
-        node_idx.extend(nodes)
-        idx=Role_set.index(attr)
-        edge_idx.extend([idx] * len(nodes))
+    for attr_name, nodes_in_attr in role_dict2.items():
+        if attr_name in Role_set: # Ensure role is in the defined set
+            nodes = sorted(list(map(int, nodes_in_attr))) # Ensure nodes are integers
+            node_idx_list.extend(nodes)
+            role_idx = Role_set.index(attr_name)
+            edge_idx_list.extend([role_idx] * len(nodes))
 
-    node_idx = np.asarray(node_idx)
-    edge_idx = np.asarray(edge_idx)
-    values = np.ones(node_idx.shape[0])
+    if not node_idx_list: # Handle case with no edges
+        indices = torch.empty((2,0), dtype=torch.long, device=device)
+        values = torch.empty((0,), dtype=torch.float, device=device)
+    else:
+        indices = torch.tensor([node_idx_list, edge_idx_list], dtype=torch.long, device=device)
+        values = torch.ones(indices.shape[1], dtype=torch.float, device=device)
 
-    H = sparse.coo_matrix((values, (node_idx, edge_idx)), shape=(n_nodes, n_edges))
-    return HyperG(H, X=X),H
+    H_sparse = torch.sparse_coo_tensor(indices, values, (n_nodes, n_edges), device=device)
+    return HyperG(H_sparse, X=X_pt), H_sparse
 
-def cross_role_hypergraphn_nodes(n_nodes,H,role_dict1,role_dict2,Cross_role_Set,w,delta_t,X=None):
-    """
-      Creates a hypergraph that connects roles across two time steps.
 
-      Args:
-          n_nodes (int): Total number of nodes.
-          H (matrix): Current hypergraph adjacency matrix.
-          role_dict1 (dict): Role dictionary for the previous time step.
-          role_dict2 (dict): Role dictionary for the current time step.
-          Cross_role_Set (list): Set of roles to be linked across time steps.
-          w (float): Weight parameter for the temporal decay.
-          delta_t (int): Time difference between two observations.
-          X (array, optional): Node features array.
-
-      Returns:
-          tuple: A tuple containing the new role hypergraph and the combined hypergraph.
-    """
+def cross_role_hypergraphn_nodes(n_nodes, H_current_roles, role_dict1, role_dict2, Cross_role_Set, w_decay_factor, delta_t, X=None, device='cpu'):
     if X is not None:
-        assert n_nodes == X.shape[0]
+        assert isinstance(X, (np.ndarray, torch.Tensor))
+        if isinstance(X, np.ndarray):
+            X_pt = torch.from_numpy(X).float().to(device)
+        else:
+            X_pt = X.float().to(device)
+        assert n_nodes == X_pt.shape[0]
+    else:
+        X_pt = None
+    
+    assert H_current_roles.is_sparse, "H_current_roles must be a PyTorch sparse tensor"
+    assert H_current_roles.shape[0] == n_nodes
+    # n_current_role_edges = H_current_roles.shape[1] # This is for role_set, not cross_role_set
 
-    n_edges = len(Cross_role_Set)
-    node_idx = []
-    edge_idx = []
+    n_cross_edges = len(Cross_role_Set)
+    node_idx_list = []
+    edge_idx_list = []
+    values_list = [] # For weighted cross-role edges
 
-    for i, attr in enumerate(role_dict2):
-        if attr in role_dict1.keys():
-            nodes=sorted(role_dict1[attr])
-            node_idx.extend(nodes)
-            idx=Cross_role_Set.index(attr)
-            edge_idx.extend([idx] * len(nodes))
+    decay_val = torch.exp(torch.tensor(w_decay_factor * delta_t, dtype=torch.float, device=device)).item()
 
-    node_idx = np.asarray(node_idx)
-    edge_idx = np.asarray(edge_idx)
-    values = torch.ones(node_idx.shape[0])*torch.exp(w*torch.tensor(delta_t,dtype=torch.float)).numpy()
+    for role_name_t2, nodes_t2 in role_dict2.items():
+        if role_name_t2 in role_dict1 and role_name_t2 in Cross_role_Set:
+            nodes_t1 = sorted(list(map(int, role_dict1[role_name_t2]))) # Nodes from t-1 having this role
+            cross_role_idx = Cross_role_Set.index(role_name_t2)
+            
+            node_idx_list.extend(nodes_t1)
+            edge_idx_list.extend([cross_role_idx] * len(nodes_t1))
+            values_list.extend([decay_val] * len(nodes_t1))
+            
+    if not node_idx_list:
+        H1_indices = torch.empty((2,0), dtype=torch.long, device=device)
+        H1_values = torch.empty((0,), dtype=torch.float, device=device)
+    else:
+        H1_indices = torch.tensor([node_idx_list, edge_idx_list], dtype=torch.long, device=device)
+        H1_values = torch.tensor(values_list, dtype=torch.float, device=device)
 
-    H1 = sparse.coo_matrix((values, (node_idx, edge_idx)), shape=(n_nodes, n_edges))
-    H_cross_role = H + H1
-    return HyperG(H1, X=X),H_cross_role
+    H1_cross_temporal_sparse = torch.sparse_coo_tensor(H1_indices, H1_values, (n_nodes, n_cross_edges), device=device)
+    
+    if H_current_roles.shape[1] == H1_cross_temporal_sparse.shape[1]:
+         H_combined = H_current_roles + H1_cross_temporal_sparse
+    else:
+        print(f"Warning: Dimensions for H_current_roles ({H_current_roles.shape}) and H1_cross_temporal_sparse ({H1_cross_temporal_sparse.shape}) differ in columns. Combination might be incorrect.")
+        H_combined = H_current_roles 
+        if H_current_roles.shape[1] != n_cross_edges:
+             raise ValueError(f"H_current_roles.shape[1] ({H_current_roles.shape[1]}) must match n_cross_edges ({n_cross_edges}) for addition.")
+        H_combined = H_current_roles + H1_cross_temporal_sparse
+
+
+    return HyperG(H1_cross_temporal_sparse, X=X_pt), H_combined
+
 
 def scipy_sparse_mat_to_torch_sparse_tensor(sparse_mx):
-    """
-    Converts a scipy sparse matrix to a PyTorch sparse tensor.
-
-    Args:
-        sparse_mx (scipy.sparse): Sparse matrix to convert.
-
-    Returns:
-        torch.sparse.FloatTensor: Corresponding sparse tensor in PyTorch.
-    """
-    sparse_mx = sparse_mx.tocoo().astype(np.float32)
+    if not isinstance(sparse_mx, scipy.sparse.coo_matrix):
+        sparse_mx = sparse_mx.tocoo()
+    sparse_mx = sparse_mx.astype(np.float32)
+    
     indices = torch.from_numpy(
-        np.vstack((sparse_mx.row, sparse_mx.col)).astype(int))
+        np.vstack((sparse_mx.row, sparse_mx.col)).astype(np.int64))
     values = torch.from_numpy(sparse_mx.data)
     shape = torch.Size(sparse_mx.shape)
-    return torch.sparse.FloatTensor(indices, values, shape)
+    return torch.sparse_coo_tensor(indices, values, shape)
 
 
 def adj_to_edge(adjmatrix):
-    """
-    Converts an adjacency matrix to edge indices and values suitable for sparse tensor creation.
+    # Converts a NumPy dense adjacency matrix to edge_index and edge_values (for unweighted graph)
+    if isinstance(adjmatrix, torch.Tensor):
+        adjmatrix_np = adjmatrix.cpu().numpy()
+    else:
+        adjmatrix_np = np.array(adjmatrix) 
+    
+    rows, cols = np.where(adjmatrix_np > 0) 
+    
+    # Create edge_index
+    i = torch.from_numpy(np.vstack((rows, cols))).long()
+    
+    # Create edge_values (assuming 1 for existing edges, consistent with original LongTensor(values))
+    v = torch.ones(i.shape[1], dtype=torch.long) 
 
-    Args:
-        adjmatrix (np.array): The adjacency matrix to convert.
+    return [i, v]
 
-    Returns:
-        list: List containing edge indices and values.
-    """
-    adjmatrix=adjmatrix.tolist()
-    tmp_coo=sparse.coo_matrix(adjmatrix)
-    values=tmp_coo.data
-    indices=np.vstack((tmp_coo.row,tmp_coo.col))
-    i=torch.LongTensor(indices)
-    v=torch.LongTensor(values)
-    return [i,v]
 
-def hypergraph_role_set(train_role_graph,time_step):
-    """
-    Identifies unique roles and cross-time roles for hypergraphs.
-
-    Args:
-        train_role_graph (dict): Dictionary of roles per time step.
-        time_step (int): Number of time steps considered.
-
-    Returns:
-        tuple: Set of unique roles and cross-time roles.
-    """
-    role_set=[]
-    cross_role_set=[]
+def hypergraph_role_set(train_role_graph, time_step):
+    role_set_all_ts = []
     for i in range(time_step):
-        role_set.extend(list(train_role_graph[i].keys()))
-    Role_set=list(set(role_set))
-    for j in range(1,time_step):
-        cross_role_set.extend(list(train_role_graph[j].keys()))
-    Cross_role_Set=list(set(cross_role_set))
-    return Role_set,Cross_role_Set
-
-def evaluate_node_classification(emb,labels,datas):
-    """
-    Evaluates node classification accuracy and AUC across multiple training sets.
-
-    Args:
-        emb (array): Node embeddings.
-        labels (array): True labels for nodes.
-        datas (list): Training/validation/testing split indices.
-
-    Returns:
-        tuple: Tuple containing average accuracies, temporary accuracies, average AUCs, and temporary AUCs.
-    """
-    labels=np.argmax(labels,1)
-    average_accs=[]
-    Temp_accs=[]
+        if i in train_role_graph:
+            role_set_all_ts.extend(list(train_role_graph[i].keys()))
     
-    Temp_aucs=[]
-    average_aucs=[]
+    Unique_Role_set = sorted(list(set(role_set_all_ts))) # Sort for consistent indexing
+
+    Cross_role_Set = Unique_Role_set 
+    # If it's roles present from t=1 onwards:
+    # cross_role_temp = []
+    # for j in range(1, time_step):
+    #     if j in train_role_graph:
+    #         cross_role_temp.extend(list(train_role_graph[j].keys()))
+    # Cross_role_Set = sorted(list(set(cross_role_temp)))
     
-    for train_nodes in datas:
-        temp_accs=[]
-        temp_aucs=[]
-        for t,train_node in enumerate(train_nodes):
-            train_vec=emb[train_node[0]].detach().cpu().numpy()
-            train_y=labels[train_node[0]]
+    return Unique_Role_set, Cross_role_Set
 
-            val_vec=emb[train_node[1]].detach().cpu().numpy()
-            val_y=labels[train_node[1]]
 
-            test_vec=emb[train_node[2]].detach().cpu().numpy()
-            test_y=labels[train_node[2]]
+def evaluate_node_classification(emb, labels_one_hot, datas_splits, device='cpu'):
+    # emb: node embeddings from model (Torch tensor)
+    # labels_one_hot: (Torch tensor or numpy array)
+    # datas_splits: list of [train_idx, val_idx, test_idx] lists/numpy arrays
+    
+    if isinstance(labels_one_hot, torch.Tensor):
+        labels_one_hot = labels_one_hot.cpu().numpy()
+    labels = np.argmax(labels_one_hot, 1)
 
-            clf=LogisticRegression(multi_class='auto',solver='lbfgs',max_iter=4000)
-            clf.fit(train_vec,train_y)
+    if isinstance(emb, torch.Tensor):
+        emb_np = emb.detach().cpu().numpy()
+    else:
+        emb_np = emb
 
-            y_pred=clf.predict(test_vec)
-            acc=accuracy_score(test_y,y_pred)
-            #Calculate the AUC metric
-            test_predict = clf.predict_proba(test_vec)
-            val_predict = clf.predict_proba(val_vec)
-
-            test_roc_score = roc_auc_score(test_y, test_predict,multi_class='ovr')
-            temp_aucs.append(test_roc_score)
+    average_accs = []
+    Temp_accs_all_ratios = []
+    average_aucs = []
+    Temp_aucs_all_ratios = []
+    
+    for train_nodes_over_ts in datas_splits: # Iterate over ratios
+        temp_accs_current_ratio = []
+        temp_aucs_current_ratio = []
+        for t, split_indices in enumerate(train_nodes_over_ts): # Iterate over time steps for this ratio
+            train_idx, val_idx, test_idx = split_indices[0], split_indices[1], split_indices[2]
             
-            temp_accs.append(acc)
-        average_acc=statistics.mean(temp_accs)
-        average_accs.append(average_acc)
-        Temp_accs.append(temp_accs)
+            # Ensure indices are numpy arrays for indexing
+            train_idx = np.array(train_idx, dtype=int)
+            val_idx = np.array(val_idx, dtype=int)
+            test_idx = np.array(test_idx, dtype=int)
+
+            train_vec = emb_np[train_idx]
+            train_y = labels[train_idx]
+
+            # val_vec = emb_np[val_idx] # Not used in this version of evaluate
+            # val_y = labels[val_idx]
+
+            test_vec = emb_np[test_idx]
+            test_y = labels[test_idx]
+
+            # Filter out any empty arrays resulting from splits
+            if train_vec.shape[0] == 0 or test_vec.shape[0] == 0 :
+                print(f"Warning: Skipping a split due to empty train/test set. Train size: {train_vec.shape[0]}, Test size: {test_vec.shape[0]}")
+                temp_accs_current_ratio.append(0.0) # Or handle as NaN or skip
+                temp_aucs_current_ratio.append(0.0)
+                continue
+
+            clf = LogisticRegression(multi_class='auto', solver='lbfgs', max_iter=4000, random_state=42)
+            clf.fit(train_vec, train_y)
+
+            y_pred = clf.predict(test_vec)
+            acc = accuracy_score(test_y, y_pred)
+            
+            if len(np.unique(test_y)) > 1 : # ROC AUC requires more than 1 class in y_true
+                test_predict_proba = clf.predict_proba(test_vec)
+                try:
+                    # Check if all classes in training are present in test for 'ovr'
+                    present_classes_train = np.unique(train_y)
+                    present_classes_test = np.unique(test_y)
+                    if not np.array_equal(np.sort(present_classes_train), np.sort(present_classes_test)) and len(present_classes_train) > len(present_classes_test):
+                        # If test set is missing classes present in train, predict_proba might have different shape than expected for all classes
+                         num_classes = labels_one_hot.shape[1] 
+                         auc_labels = np.arange(num_classes)
+                         test_roc_score = roc_auc_score(test_y, test_predict_proba, multi_class='ovr', average='macro', labels=auc_labels)
+
+                    else:
+                         test_roc_score = roc_auc_score(test_y, test_predict_proba, multi_class='ovr', average='macro')
+
+                except ValueError as e:
+                    print(f"ROC AUC calculation error: {e}. Test_y unique: {np.unique(test_y)}. Setting AUC to 0.0 for this split.")
+                    test_roc_score = 0.0 # Handle cases where AUC cannot be computed
+            else:
+                test_roc_score = 0.0 # Or 0.5 if interpreted as random guessing, but 0.0 for problematic cases.
+
+            temp_aucs_current_ratio.append(test_roc_score)
+            temp_accs_current_ratio.append(acc)
+            
+        if temp_accs_current_ratio: # Avoid division by zero if all splits were empty
+            average_accs.append(statistics.mean(temp_accs_current_ratio))
+            average_aucs.append(statistics.mean(temp_aucs_current_ratio))
+        else:
+            average_accs.append(0.0)
+            average_aucs.append(0.0)
+            
+        Temp_accs_all_ratios.append(temp_accs_current_ratio)
+        Temp_aucs_all_ratios.append(temp_aucs_current_ratio)
         
-        average_auc=statistics.mean(temp_aucs)
-        average_aucs.append(average_auc)
-        Temp_aucs.append(temp_aucs)
-    return average_accs,Temp_accs,average_aucs,Temp_aucs
+    return average_accs, Temp_accs_all_ratios, average_aucs, Temp_aucs_all_ratios

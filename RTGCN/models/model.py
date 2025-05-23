@@ -280,7 +280,11 @@ class HyperGNN(nn.Module):
         Returns:
             Tensor: Updated node embeddings.
         """
-        rs = hyp_graph @ torch.matmul( node_initial_emb,W)
+        # rs = hyp_graph @ torch.matmul( node_initial_emb,W)
+        hyp_graph_dense = hyp_graph.to_dense()
+        node_emb_transformed = torch.matmul(node_initial_emb, W)
+        rs = torch.matmul(hyp_graph_dense, node_emb_transformed)
+        
         rs = (1-self.alpha)*self.proj(node_initial_emb)+rs*self.alpha
         return rs
 
@@ -383,8 +387,14 @@ class MatGRUGate(torch.nn.Module):
         Returns:
             Tensor: Output of the gate after applying the activation function.
         """
-        temp = adj.matmul(self.W)
-        temp1=incident_matrix.matmul(self.W1)
+        # temp = adj.matmul(self.W)
+        # temp1=incident_matrix.matmul(self.W1)
+        adj_dense = adj.to_dense()
+        temp = torch.matmul(adj_dense, self.W)
+
+        incident_matrix_dense = incident_matrix.to_dense()
+        temp1 = torch.matmul(incident_matrix_dense, self.W1)
+        
         if self.transform == True:
             out = self.activation(self.P.matmul(temp) +self.P.matmul(temp1)+ hidden.matmul(self.U) + self.bias)
         else:
