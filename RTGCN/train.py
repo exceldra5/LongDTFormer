@@ -23,8 +23,6 @@ from utils1 import (
     set_random_seed # For reproducibility
 )
 
-set_random_seed(0)
-
 torch.autograd.set_detect_anomaly(True) # Keep for debugging
 
 def numpy_adj_to_torch_sparse_coo(adj_matrix_np, device='cpu'):
@@ -100,9 +98,13 @@ if __name__ == "__main__":
     parser.add_argument('--learning_rate', type=float, default=0.008)
     parser.add_argument('--weight_decay', type=float, default=0.0003)
     parser.add_argument('--window', type=int, default=-1)
+    parser.add_argument('--seed', type=int, default=0, help='Random seed for reproducibility')
     
     args = parser.parse_args()
     print(args)
+
+    # Set random seed for reproducibility
+    set_random_seed(args.seed)
 
     # Setup device
     if torch.cuda.is_available() and args.GPU_ID >= 0:
@@ -159,7 +161,7 @@ if __name__ == "__main__":
     Role_set, Cross_role_Set = hypergraph_role_set(train_role_graph_df, args.time_steps)
     H_prev_ts_roles = None # To store H from gen_attribute_hg of t-1
 
-    set_random_seed(0)
+    set_random_seed(args.seed)  # Use the same seed as the main training
     for i in range(args.time_steps):
         if i not in train_role_graph_df: # Handle missing timesteps in role data
             # Append placeholder sparse tensors if a timestep is missing
